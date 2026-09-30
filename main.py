@@ -10,10 +10,10 @@ st.markdown("""
     <style>
     /* Streamlit 기본 여백 제거 및 전체 화면 구성 */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 0.5rem !important;
         padding-bottom: 0rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
         max-width: 100% !important;
     }
     header {visibility: hidden;}
@@ -29,7 +29,6 @@ st.markdown("""
         text-align: center;
         border: 2px solid #00ff66;
         margin-top: 10px;
-        box-shadow: 0px 4px 10px rgba(0,255,102,0.2);
     }
     .egg-crack {
         text-align: center;
@@ -95,7 +94,7 @@ if 'day' not in st.session_state:
 if 'logs' not in st.session_state:
     st.session_state.logs = []
 
-# --- 3D 1인칭 직접 조작 캔버스 (Three.js + PointerLockControls) ---
+# --- 3D 1인칭 직접 조작 캔버스 (마우스 드래그 및 키보드 통합 컨트롤) ---
 def render_interactive_3d_world():
     html_code = """
     <!DOCTYPE html>
@@ -103,44 +102,43 @@ def render_interactive_3d_world():
     <head>
         <style>
             body { margin: 0; overflow: hidden; font-family: sans-serif; background: #000; }
-            #canvas-container { width: 100vw; height: 75vh; position: relative; }
-            #instructions {
-                position: absolute; width: 100%; height: 100%;
-                background: rgba(0,0,0,0.6); color: white;
-                display: flex; flex-direction: column;
-                justify-content: center; align-items: center;
-                cursor: pointer; z-index: 10;
-            }
+            #canvas-container { width: 100vw; height: 70vh; position: relative; user-select: none; }
             #ui-box {
-                position: absolute; bottom: 20px; left: 50%;
+                position: absolute; bottom: 15px; left: 50%;
                 transform: translateX(-50%);
-                background: rgba(0,0,0,0.8); color: #00ff66;
-                padding: 12px 24px; border-radius: 8px;
-                border: 2px solid #00ff66; font-size: 18px; text-align: center;
+                background: rgba(0,0,0,0.85); color: #00ff66;
+                padding: 10px 20px; border-radius: 8px;
+                border: 2px solid #00ff66; font-size: 16px; text-align: center;
                 z-index: 5; pointer-events: none;
             }
             #door-btn {
-                position: absolute; top: 20px; left: 50%;
+                position: absolute; top: 15px; left: 50%;
                 transform: translateX(-50%);
                 background: #ffcc00; color: #000; font-weight: bold;
                 padding: 12px 24px; border-radius: 8px; font-size: 18px;
                 border: none; cursor: pointer; display: none; z-index: 20;
+                box-shadow: 0 0 10px #ffcc00;
+            }
+            #guide-overlay {
+                position: absolute; top: 10px; left: 10px;
+                background: rgba(0,0,0,0.6); color: #fff;
+                padding: 8px 12px; border-radius: 6px; font-size: 13px;
+                z-index: 10; pointer-events: none;
             }
         </style>
     </head>
     <body>
         <div id="canvas-container">
-            <div id="instructions">
-                <h1>🎮 화면을 클릭하면 조작이 시작됩니다</h1>
-                <p><b>[이동]</b> W, A, S, D | <b>[시점 회전]</b> 마우스 360도 이동</p>
-                <p><b>[ESC]</b> 마우스 포인터 해제</p>
+            <div id="guide-overlay">
+                🕹️ <b>조작방법:</b><br>
+                - 이동: <b>W, A, S, D</b> 키<br>
+                - 시점 회전: <b>마우스 클릭 후 드래그</b>
             </div>
             <button id="door-btn" onclick="doorInteract()">🚪 집 밖으로 나가기</button>
-            <div id="ui-box">💬 거실을 자유롭게 둘러보고 현관문으로 이동하세요.</div>
+            <div id="ui-box">💬 거실을 탐색하세요! 현관문(오른쪽 벽) 근처로 이동하면 나갈 수 있습니다.</div>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 
         <script>
             let container = document.getElementById('canvas-container');
@@ -150,25 +148,20 @@ def render_interactive_3d_world():
             renderer.setSize(container.clientWidth, container.clientHeight);
             container.appendChild(renderer.domElement);
 
-            let controls = new THREE.PointerLockControls(camera, document.body);
-            let instructions = document.getElementById('instructions');
             let uiBox = document.getElementById('ui-box');
             let doorBtn = document.getElementById('door-btn');
 
-            instructions.addEventListener('click', function () { controls.lock(); });
-            controls.addEventListener('lock', function () { instructions.style.display = 'none'; });
-            controls.addEventListener('unlock', function () { instructions.style.display = 'flex'; });
+            let currentZone = 0; // 0: 집 안, 1: 도시
 
-            // 환경 상태 (0: 집 안, 1: 도시)
-            let currentZone = 0; 
-
-            // 조작 변수
+            // 이동 및 마우스 드래그 변수
             let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-            let prevTime = performance.now();
-            let velocity = new THREE.Vector3();
-            let direction = new THREE.Vector3();
+            let isMouseDown = false;
+            let mouseX = 0, mouseY = 0;
+            let lon = -90, lat = 0;
+            let phi = 0, theta = 0;
 
-            document.addEventListener('keydown', (e) => {
+            // 이벤트 리스너: 키보드 이동
+            window.addEventListener('keydown', (e) => {
                 switch (e.code) {
                     case 'KeyW': moveForward = true; break;
                     case 'KeyA': moveLeft = true; break;
@@ -176,12 +169,29 @@ def render_interactive_3d_world():
                     case 'KeyD': moveRight = true; break;
                 }
             });
-            document.addEventListener('keyup', (e) => {
+            window.addEventListener('keyup', (e) => {
                 switch (e.code) {
                     case 'KeyW': moveForward = false; break;
                     case 'KeyA': moveLeft = false; break;
                     case 'KeyS': moveBackward = false; break;
                     case 'KeyD': moveRight = false; break;
+                }
+            });
+
+            // 이벤트 리스너: 마우스 드래그 시점 회전
+            container.addEventListener('mousedown', (e) => {
+                isMouseDown = true;
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+            });
+            window.addEventListener('mouseup', () => { isMouseDown = false; });
+            window.addEventListener('mousemove', (e) => {
+                if (isMouseDown) {
+                    lon += (e.clientX - mouseX) * 0.25;
+                    lat -= (e.clientY - mouseY) * 0.25;
+                    lat = Math.max(-85, Math.min(85, lat));
+                    mouseX = e.clientX;
+                    mouseY = e.clientY;
                 }
             });
 
@@ -207,30 +217,25 @@ def render_interactive_3d_world():
                 let doorMat = new THREE.MeshStandardMaterial({ color: 0x553311 });
                 let door = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4, 2), doorMat);
                 door.position.set(9.9, 2, 0);
-                door.name = "DOOR";
                 houseGroup.add(door);
 
-                // 가구 (소파, TV)
+                // 가구
                 let sofa = new THREE.Mesh(new THREE.BoxGeometry(3, 1, 1.5), new THREE.MeshStandardMaterial({ color: 0x992222 }));
                 sofa.position.set(-5, 0.5, -5);
                 houseGroup.add(sofa);
 
                 scene.add(houseGroup);
-                
-                // 시작 카메라 위치 (1인칭 시점)
                 camera.position.set(0, 1.6, 0);
             }
 
             function buildCity() {
                 scene.remove(houseGroup);
-                scene.background = new THREE.Color(0x87ceeb); // 하늘색
+                scene.background = new THREE.Color(0x87ceeb);
 
-                // 길거리 바닥
                 let road = new THREE.Mesh(new THREE.PlaneGeometry(50, 100), new THREE.MeshStandardMaterial({ color: 0x444444 }));
                 road.rotation.x = -Math.PI / 2;
                 cityGroup.add(road);
 
-                // 건물의 열
                 for(let i = -40; i <= 40; i += 20) {
                     let b1 = new THREE.Mesh(new THREE.BoxGeometry(10, 15 + Math.random()*10, 10), new THREE.MeshStandardMaterial({ color: 0x778899 }));
                     b1.position.set(-15, 8, i);
@@ -254,10 +259,10 @@ def render_interactive_3d_world():
 
                 scene.add(cityGroup);
                 camera.position.set(0, 1.6, 30);
-                uiBox.innerText = "🍦 저기 멀리 보이는 아이스크림 가게로 걸어가세요!";
+                uiBox.innerText = "🍦 저기 멀리 보이는 분홍색 아이스크림 가게로 전진(W)하세요!";
             }
 
-            // 조명 설정
+            // 조명
             let light = new THREE.DirectionalLight(0xffffff, 1);
             light.position.set(10, 20, 10);
             scene.add(light);
@@ -265,68 +270,65 @@ def render_interactive_3d_world():
 
             buildHouse();
 
-            // 현관문 이동 클릭 이벤트
             window.doorInteract = function() {
                 currentZone = 1;
                 doorBtn.style.display = 'none';
                 buildCity();
-                controls.lock();
             };
 
             let captured = false;
+            let speed = 0.15;
 
-            // 메인 게임 애니메이션 루프
             function animate() {
                 requestAnimationFrame(animate);
 
-                let time = performance.now();
-                let delta = (time - prevTime) / 1000;
+                // 시점 계산
+                lat = Math.max(-85, Math.min(85, lat));
+                phi = THREE.MathUtils.degToRad(90 - lat);
+                theta = THREE.MathUtils.degToRad(lon);
 
-                if (controls.isLocked) {
-                    velocity.x -= velocity.x * 10.0 * delta;
-                    velocity.z -= velocity.z * 10.0 * delta;
+                let target = new THREE.Vector3();
+                target.x = camera.position.x + 100 * Math.sin(phi) * Math.cos(theta);
+                target.y = camera.position.y + 100 * Math.cos(phi);
+                target.z = camera.position.z + 100 * Math.sin(phi) * Math.sin(theta);
+                camera.lookAt(target);
 
-                    direction.z = Number(moveForward) - Number(moveBackward);
-                    direction.x = Number(moveRight) - Number(moveLeft);
-                    direction.normalize();
+                // 이동 계산
+                let dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                dir.y = 0;
+                dir.normalize();
 
-                    if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
-                    if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+                let sideDir = new THREE.Vector3(-dir.z, 0, dir.x);
 
-                    controls.moveRight(-velocity.x * delta);
-                    controls.moveForward(-velocity.z * delta);
+                if (moveForward) camera.position.addScaledVector(dir, speed);
+                if (moveBackward) camera.position.addScaledVector(dir, -speed);
+                if (moveLeft) camera.position.addScaledVector(sideDir, -speed);
+                if (moveRight) camera.position.addScaledVector(sideDir, speed);
 
-                    // 1. 집 안에서 현관문 근처 감지
-                    if (currentZone === 0) {
-                        if (camera.position.x > 7.5 && Math.abs(camera.position.z) < 2) {
-                            doorBtn.style.display = 'block';
-                            uiBox.innerText = "🚪 현관문 앞입니다! 버튼을 눌러 밖으로 나가세요.";
-                        } else {
-                            doorBtn.style.display = 'none';
-                            uiBox.innerText = "💬 WASD키로 이동하여 현관문(오른쪽)으로 가세요.";
-                        }
-                    }
-
-                    // 2. 도시에서 아이스크림 가게로 가던 중 UFO 납치 이벤트 발생
-                    if (currentZone === 1 && !captured) {
-                        if (camera.position.z < 0) {
-                            captured = true;
-                            controls.unlock();
-                            uiBox.innerText = "🛸 하늘에서 초록 외계인 UFO가 나타났습니다!!";
-                            
-                            // UFO 광선 및 끌려가는 연출 후 다음 단계로
-                            let beam = new THREE.Mesh(new THREE.CylinderGeometry(2, 4, 20, 16), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 }));
-                            beam.position.set(0, 10, camera.position.z);
-                            scene.add(beam);
-
-                            setTimeout(() => {
-                                window.parent.postMessage({ type: 'UFO_CAPTURED' }, '*');
-                            }, 2000);
-                        }
+                // 현관문 체크
+                if (currentZone === 0) {
+                    if (camera.position.x > 7.0 && Math.abs(camera.position.z) < 3.0) {
+                        doorBtn.style.display = 'block';
+                        uiBox.innerText = "🚪 현관문 앞입니다! 버튼을 눌러 밖으로 나가세요.";
+                    } else {
+                        doorBtn.style.display = 'none';
+                        uiBox.innerText = "💬 W,A,S,D키로 이동하여 현관문(오른쪽 벽)으로 가세요.";
                     }
                 }
 
-                prevTime = time;
+                // UFO 납치 체크
+                if (currentZone === 1 && !captured) {
+                    if (camera.position.z < 0) {
+                        captured = true;
+                        uiBox.innerText = "🛸 하늘에서 초록 외계인 UFO가 나타나 당신을 빨아들입니다!!";
+                        
+                        let beam = new THREE.Mesh(new THREE.CylinderGeometry(2, 5, 25, 16), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.6 }));
+                        beam.position.set(0, 10, camera.position.z);
+                        scene.add(beam);
+                    }
+                }
+
                 renderer.render(scene, camera);
             }
 
@@ -335,7 +337,8 @@ def render_interactive_3d_world():
     </body>
     </html>
     """
-    components.html(html_code, height=650)
+    # pointer-lock 브라우저 제한 우회를 위해 마우스 드래그 방식 사용
+    components.html(html_code, height=620)
 
 # 3D 공룡 렌더링
 def render_3d_dino(dino_name, dino_color):
@@ -394,7 +397,7 @@ def render_3d_dino(dino_name, dino_color):
 
 # 0. 메인 시작 화면
 if st.session_state.stage == 'TITLE':
-    st.markdown("<h1 style='text-align: center; margin-top: 100px;'>🦖 공룡 시대 생존기 🛸</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; margin-top: 80px;'>🦖 공룡 시대 생존기 🛸</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>일상에서 공룡 시대로! 1인칭 직접 조작 생존 게임</p>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -403,15 +406,13 @@ if st.session_state.stage == 'TITLE':
             st.session_state.stage = 'STORY_3D'
             st.rerun()
 
-# 1. 3D 직접 조작 탐색 (가정집 1인칭 조작 -> 현관문 -> 도시 이동 -> UFO 납치)
+# 1. 3D 직접 조작 탐색
 elif st.session_state.stage == 'STORY_3D':
-    st.write("🕹️ **조작법:** 3D 화면을 클릭하면 마우스로 360도 시점 회전이 가능합니다. (이동: W, A, S, D)")
+    st.write("🎮 **조작 가이드:** 화면을 클릭한 채로 드래그하면 **360도 시점 변경**, **W, A, S, D**키로 이동합니다.")
     
-    # 3D 인터랙티브 월드 출력
     render_interactive_3d_world()
     
-    # UFO에 납치되었을 때 다음 단계로 넘어가기 위한 수동 전환 버튼 제공
-    if st.button("🌀 UFO에 납치된 후 정신 차리기 (다음으로)"):
+    if st.button("🌀 UFO에 납치되어 다음 단계로 진행", use_container_width=True):
         st.session_state.stage = 'ERA_SELECT'
         st.rerun()
 
@@ -470,7 +471,7 @@ elif st.session_state.stage == 'DINO_3D':
             st.session_state.logs.append(f"[{st.session_state.selected_era}] 시대에 {dino['name']}(으)로 생존을 시작합니다!")
             st.rerun()
 
-# 6. 메인 1인칭 생존 게임
+# 6. 메인 생존 게임
 elif st.session_state.stage == 'PLAYING':
     dino = st.session_state.player_dino
     era = st.session_state.selected_era
