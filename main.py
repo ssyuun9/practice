@@ -3,14 +3,24 @@ import streamlit.components.v1 as components
 import random
 import time
 
-# 페이지 기본 설정
-st.set_page_config(page_title="공룡 시대 생존기", page_icon="🦖", layout="centered")
+# 1. 페이지 및 화면 전체 채우기 설정 (CSS)
+st.set_page_config(page_title="공룡 시대 생존기", page_icon="🦖", layout="wide")
 
-# --- CSS 스타일링 (화면 연출 및 자막) ---
 st.markdown("""
     <style>
+    /* Streamlit 기본 여백 제거 및 전체 화면 구성 */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 0rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+        max-width: 100% !important;
+    }
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    
     .subtitle-box {
-        background-color: rgba(0, 0, 0, 0.8);
+        background-color: rgba(0, 0, 0, 0.85);
         color: #00ff66;
         padding: 15px 20px;
         border-radius: 8px;
@@ -18,16 +28,13 @@ st.markdown("""
         font-size: 18px;
         text-align: center;
         border: 2px solid #00ff66;
-        margin-top: 15px;
+        margin-top: 10px;
         box-shadow: 0px 4px 10px rgba(0,255,102,0.2);
     }
     .egg-crack {
         text-align: center;
         font-size: 80px;
         user-select: none;
-    }
-    .stButton>button {
-        font-weight: bold;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -47,7 +54,7 @@ ERA_DATA = {
         ]
     },
     "쥐라기": {
-        "desc": "울창한 침엽수림과 거대한 거대 용각류가 지배하는 온난한 시대입니다.",
+        "desc": "울창한 침엽수림과 거대한 용각류가 지배하는 온난한 시대입니다.",
         "dinos": [
             {"name": "알로사우루스", "color": "#ff3333", "hp": 120, "desc": "쥐라기 최고의 맹렬한 포식자"},
             {"name": "스테고사우루스", "color": "#3388ff", "hp": 150, "desc": "등의 골판과 꼬리 가시를 가진 초식 공룡"}
@@ -74,9 +81,7 @@ ERA_DATA = {
 
 # --- 세션 상태 초기화 ---
 if 'stage' not in st.session_state:
-    st.session_state.stage = 'TITLE'  # TITLE -> STORY_INTRO -> ERA_SELECT -> FLASH -> EGG -> DINO_3D -> PLAYING
-if 'intro_step' not in st.session_state:
-    st.session_state.intro_step = 0
+    st.session_state.stage = 'TITLE'  # TITLE -> STORY_3D -> ERA_SELECT -> FLASH -> EGG -> DINO_3D -> PLAYING
 if 'selected_era' not in st.session_state:
     st.session_state.selected_era = None
 if 'player_dino' not in st.session_state:
@@ -90,112 +95,249 @@ if 'day' not in st.session_state:
 if 'logs' not in st.session_state:
     st.session_state.logs = []
 
-# --- 3D 연출 렌더링 함수들 (Three.js) ---
+# --- 3D 1인칭 직접 조작 캔버스 (Three.js + PointerLockControls) ---
+def render_interactive_3d_world():
+    html_code = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body { margin: 0; overflow: hidden; font-family: sans-serif; background: #000; }
+            #canvas-container { width: 100vw; height: 75vh; position: relative; }
+            #instructions {
+                position: absolute; width: 100%; height: 100%;
+                background: rgba(0,0,0,0.6); color: white;
+                display: flex; flex-direction: column;
+                justify-content: center; align-items: center;
+                cursor: pointer; z-index: 10;
+            }
+            #ui-box {
+                position: absolute; bottom: 20px; left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0,0,0,0.8); color: #00ff66;
+                padding: 12px 24px; border-radius: 8px;
+                border: 2px solid #00ff66; font-size: 18px; text-align: center;
+                z-index: 5; pointer-events: none;
+            }
+            #door-btn {
+                position: absolute; top: 20px; left: 50%;
+                transform: translateX(-50%);
+                background: #ffcc00; color: #000; font-weight: bold;
+                padding: 12px 24px; border-radius: 8px; font-size: 18px;
+                border: none; cursor: pointer; display: none; z-index: 20;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="canvas-container">
+            <div id="instructions">
+                <h1>🎮 화면을 클릭하면 조작이 시작됩니다</h1>
+                <p><b>[이동]</b> W, A, S, D | <b>[시점 회전]</b> 마우스 360도 이동</p>
+                <p><b>[ESC]</b> 마우스 포인터 해제</p>
+            </div>
+            <button id="door-btn" onclick="doorInteract()">🚪 집 밖으로 나가기</button>
+            <div id="ui-box">💬 거실을 자유롭게 둘러보고 현관문으로 이동하세요.</div>
+        </div>
 
-# 1. 가정집 탑뷰 로블록스 캐릭터 렌더링
-def render_house_topview(step):
-    html_code = f"""
-    <div id="canvas-container" style="width: 100%; height: 380px; background-color: #1a1a1a; border-radius: 10px;"></div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script>
-        const container = document.getElementById('canvas-container');
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87ceeb); // 기본 하늘색
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 
-        const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({{ antialias: true }});
-        renderer.setSize(container.clientWidth, container.clientHeight);
-        container.appendChild(renderer.domElement);
+        <script>
+            let container = document.getElementById('canvas-container');
+            let scene = new THREE.Scene();
+            let camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+            let renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
 
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 15, 5);
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            let controls = new THREE.PointerLockControls(camera, document.body);
+            let instructions = document.getElementById('instructions');
+            let uiBox = document.getElementById('ui-box');
+            let doorBtn = document.getElementById('door-btn');
 
-        const step = {step};
+            instructions.addEventListener('click', function () { controls.lock(); });
+            controls.addEventListener('lock', function () { instructions.style.display = 'none'; });
+            controls.addEventListener('unlock', function () { instructions.style.display = 'flex'; });
 
-        // 로블록스 스타일 블록 캐릭터 생성
-        const charGroup = new THREE.Group();
-        const matHead = new THREE.MeshStandardMaterial({{ color: 0xffcc99 }});
-        const matTorso = new THREE.MeshStandardMaterial({{ color: 0x3366cc }});
-        const matLimbs = new THREE.MeshStandardMaterial({{ color: 0x222222 }});
+            // 환경 상태 (0: 집 안, 1: 도시)
+            let currentZone = 0; 
 
-        // 머리 (정묵형)
-        const head = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), matHead);
-        head.position.y = 1.4;
-        charGroup.add(head);
+            // 조작 변수
+            let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+            let prevTime = performance.now();
+            let velocity = new THREE.Vector3();
+            let direction = new THREE.Vector3();
 
-        // 몸통
-        const torso = new THREE.Mesh(new THREE.BoxGeometry(1, 1.2, 0.5), matTorso);
-        torso.position.y = 0.4;
-        charGroup.add(torso);
+            document.addEventListener('keydown', (e) => {
+                switch (e.code) {
+                    case 'KeyW': moveForward = true; break;
+                    case 'KeyA': moveLeft = true; break;
+                    case 'KeyS': moveBackward = true; break;
+                    case 'KeyD': moveRight = true; break;
+                }
+            });
+            document.addEventListener('keyup', (e) => {
+                switch (e.code) {
+                    case 'KeyW': moveForward = false; break;
+                    case 'KeyA': moveLeft = false; break;
+                    case 'KeyS': moveBackward = false; break;
+                    case 'KeyD': moveRight = false; break;
+                }
+            });
 
-        // 다리
-        const legL = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1, 0.45), matLimbs);
-        legL.position.set(-0.25, -0.7, 0);
-        const legR = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1, 0.45), matLimbs);
-        legR.position.set(0.25, -0.7, 0);
-        charGroup.add(legL); charGroup.add(legR);
+            // --- 월드 구축 ---
+            let houseGroup = new THREE.Group();
+            let cityGroup = new THREE.Group();
+            let ufoGroup = new THREE.Group();
 
-        scene.add(charGroup);
+            function buildHouse() {
+                scene.background = new THREE.Color(0x1a1a1a);
+                // 바닥
+                let floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ color: 0x8b5a2b }));
+                floor.rotation.x = -Math.PI / 2;
+                houseGroup.add(floor);
+                // 벽
+                let wallMat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
+                let wall1 = new THREE.Mesh(new THREE.BoxGeometry(20, 5, 0.2), wallMat); wall1.position.set(0, 2.5, -10);
+                let wall2 = new THREE.Mesh(new THREE.BoxGeometry(20, 5, 0.2), wallMat); wall2.position.set(0, 2.5, 10);
+                let wall3 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 5, 20), wallMat); wall3.position.set(-10, 2.5, 0);
+                houseGroup.add(wall1, wall2, wall3);
 
-        // 환경 구성 (집/길/UFO)
-        if (step <= 1) {{
-            // 가정집 거실 바닥 & 벽
-            const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshStandardMaterial({{ color: 0x8b5a2b }}));
-            floor.rotation.x = -Math.PI / 2;
-            scene.add(floor);
-            
-            // 소파
-            const sofa = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 1), new THREE.MeshStandardMaterial({{ color: 0xaa3333 }}));
-            sofa.position.set(-2, 0.4, -2);
-            scene.add(sofa);
+                // 현관문
+                let doorMat = new THREE.MeshStandardMaterial({ color: 0x553311 });
+                let door = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4, 2), doorMat);
+                door.position.set(9.9, 2, 0);
+                door.name = "DOOR";
+                houseGroup.add(door);
 
-            // 탑뷰 카메라 (위에서 내려다보는 시점)
-            camera.position.set(0, 6, 3);
-            camera.lookAt(0, 0, 0);
-        }} else {{
-            // 야외 (길거리 & 하늘)
-            const road = new THREE.Mesh(new THREE.PlaneGeometry(10, 20), new THREE.MeshStandardMaterial({{ color: 0x555555 }}));
-            road.rotation.x = -Math.PI / 2;
-            scene.add(road);
+                // 가구 (소파, TV)
+                let sofa = new THREE.Mesh(new THREE.BoxGeometry(3, 1, 1.5), new THREE.MeshStandardMaterial({ color: 0x992222 }));
+                sofa.position.set(-5, 0.5, -5);
+                houseGroup.add(sofa);
 
-            if (step >= 3) {{
-                // UFO 연출
-                const ufoGroup = new THREE.Group();
-                const ufoDisc = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 0.4, 16), new THREE.MeshStandardMaterial({{ color: 0x888888 }}));
-                const ufoDome = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), new THREE.MeshStandardMaterial({{ color: 0x00ff00, transparent: true, opacity: 0.7 }}));
-                ufoDome.position.y = 0.3;
-                ufoGroup.add(ufoDisc); ufoGroup.add(ufoDome);
-                ufoGroup.position.set(0, 5, 0);
-                scene.add(ufoGroup);
+                scene.add(houseGroup);
+                
+                // 시작 카메라 위치 (1인칭 시점)
+                camera.position.set(0, 1.6, 0);
+            }
 
-                if (step === 4) {{
-                    // 광선 연출
-                    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.5, 5, 16), new THREE.MeshBasicMaterial({{ color: 0x00ff00, transparent: true, opacity: 0.4 }}));
-                    beam.position.set(0, 2.5, 0);
-                    scene.add(beam);
-                    charGroup.position.y = 2; // 끌려가는 연출
-                }}
-            }}
+            function buildCity() {
+                scene.remove(houseGroup);
+                scene.background = new THREE.Color(0x87ceeb); // 하늘색
 
-            camera.position.set(0, 4, 6);
-            camera.lookAt(charGroup.position);
-        }}
+                // 길거리 바닥
+                let road = new THREE.Mesh(new THREE.PlaneGeometry(50, 100), new THREE.MeshStandardMaterial({ color: 0x444444 }));
+                road.rotation.x = -Math.PI / 2;
+                cityGroup.add(road);
 
-        function animate() {{
-            requestAnimationFrame(animate);
-            if (step === 4) {{
-                charGroup.rotation.y += 0.05;
-            }}
-            renderer.render(scene, camera);
-        }}
-        animate();
-    </script>
+                // 건물의 열
+                for(let i = -40; i <= 40; i += 20) {
+                    let b1 = new THREE.Mesh(new THREE.BoxGeometry(10, 15 + Math.random()*10, 10), new THREE.MeshStandardMaterial({ color: 0x778899 }));
+                    b1.position.set(-15, 8, i);
+                    let b2 = new THREE.Mesh(new THREE.BoxGeometry(10, 15 + Math.random()*10, 10), new THREE.MeshStandardMaterial({ color: 0x778899 }));
+                    b2.position.set(15, 8, i);
+                    cityGroup.add(b1, b2);
+                }
+
+                // 아이스크림 가게
+                let shop = new THREE.Mesh(new THREE.BoxGeometry(8, 6, 8), new THREE.MeshStandardMaterial({ color: 0xff6699 }));
+                shop.position.set(0, 3, -35);
+                cityGroup.add(shop);
+
+                // UFO
+                let ufoDisc = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 1, 16), new THREE.MeshStandardMaterial({ color: 0x888888 }));
+                let ufoDome = new THREE.Mesh(new THREE.SphereGeometry(2.5, 16, 16), new THREE.MeshStandardMaterial({ color: 0x00ff00, transparent: true, opacity: 0.7 }));
+                ufoDome.position.y = 0.5;
+                ufoGroup.add(ufoDisc, ufoDome);
+                ufoGroup.position.set(0, 20, -20);
+                cityGroup.add(ufoGroup);
+
+                scene.add(cityGroup);
+                camera.position.set(0, 1.6, 30);
+                uiBox.innerText = "🍦 저기 멀리 보이는 아이스크림 가게로 걸어가세요!";
+            }
+
+            // 조명 설정
+            let light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(10, 20, 10);
+            scene.add(light);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+            buildHouse();
+
+            // 현관문 이동 클릭 이벤트
+            window.doorInteract = function() {
+                currentZone = 1;
+                doorBtn.style.display = 'none';
+                buildCity();
+                controls.lock();
+            };
+
+            let captured = false;
+
+            // 메인 게임 애니메이션 루프
+            function animate() {
+                requestAnimationFrame(animate);
+
+                let time = performance.now();
+                let delta = (time - prevTime) / 1000;
+
+                if (controls.isLocked) {
+                    velocity.x -= velocity.x * 10.0 * delta;
+                    velocity.z -= velocity.z * 10.0 * delta;
+
+                    direction.z = Number(moveForward) - Number(moveBackward);
+                    direction.x = Number(moveRight) - Number(moveLeft);
+                    direction.normalize();
+
+                    if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
+                    if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+
+                    controls.moveRight(-velocity.x * delta);
+                    controls.moveForward(-velocity.z * delta);
+
+                    // 1. 집 안에서 현관문 근처 감지
+                    if (currentZone === 0) {
+                        if (camera.position.x > 7.5 && Math.abs(camera.position.z) < 2) {
+                            doorBtn.style.display = 'block';
+                            uiBox.innerText = "🚪 현관문 앞입니다! 버튼을 눌러 밖으로 나가세요.";
+                        } else {
+                            doorBtn.style.display = 'none';
+                            uiBox.innerText = "💬 WASD키로 이동하여 현관문(오른쪽)으로 가세요.";
+                        }
+                    }
+
+                    // 2. 도시에서 아이스크림 가게로 가던 중 UFO 납치 이벤트 발생
+                    if (currentZone === 1 && !captured) {
+                        if (camera.position.z < 0) {
+                            captured = true;
+                            controls.unlock();
+                            uiBox.innerText = "🛸 하늘에서 초록 외계인 UFO가 나타났습니다!!";
+                            
+                            // UFO 광선 및 끌려가는 연출 후 다음 단계로
+                            let beam = new THREE.Mesh(new THREE.CylinderGeometry(2, 4, 20, 16), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 }));
+                            beam.position.set(0, 10, camera.position.z);
+                            scene.add(beam);
+
+                            setTimeout(() => {
+                                window.parent.postMessage({ type: 'UFO_CAPTURED' }, '*');
+                            }, 2000);
+                        }
+                    }
+                }
+
+                prevTime = time;
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        </script>
+    </body>
+    </html>
     """
-    components.html(html_code, height=400)
+    components.html(html_code, height=650)
 
-# 2. 3D 공룡 렌더링
+# 3D 공룡 렌더링
 def render_3d_dino(dino_name, dino_color):
     html_code = f"""
     <div id="dino-3d-container" style="width: 100%; height: 350px; background-color: #111; border-radius: 10px;"></div>
@@ -217,27 +359,19 @@ def render_3d_dino(dino_name, dino_color):
         const dinoGroup = new THREE.Group();
         const material = new THREE.MeshStandardMaterial({{ color: '{dino_color}', roughness: 0.4 }});
 
-        // 몸통
         const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 2), material);
         dinoGroup.add(body);
-
-        // 머리
         const head = new THREE.Mesh(new THREE.BoxGeometry(1, 0.9, 1.3), material);
         head.position.set(0, 0.8, 1.2);
         dinoGroup.add(head);
-
-        // 꼬리
         const tail = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.5, 8), material);
         tail.rotation.x = -Math.PI / 3;
         tail.position.set(0, -0.2, -1.8);
         dinoGroup.add(tail);
 
-        // 다리
         const legGeo = new THREE.CylinderGeometry(0.3, 0.3, 1.2, 8);
-        const leg1 = new THREE.Mesh(legGeo, material);
-        leg1.position.set(-0.6, -1, 0);
-        const leg2 = new THREE.Mesh(legGeo, material);
-        leg2.position.set(0.6, -1, 0);
+        const leg1 = new THREE.Mesh(legGeo, material); leg1.position.set(-0.6, -1, 0);
+        const leg2 = new THREE.Mesh(legGeo, material); leg2.position.set(0.6, -1, 0);
         dinoGroup.add(leg1); dinoGroup.add(leg2);
 
         scene.add(dinoGroup);
@@ -255,47 +389,31 @@ def render_3d_dino(dino_name, dino_color):
     components.html(html_code, height=370)
 
 # ==========================================
-# 메인 게임 흐름 제어
+# 게임 단계 제어
 # ==========================================
 
-# 0. 시작 화면
+# 0. 메인 시작 화면
 if st.session_state.stage == 'TITLE':
-    st.markdown("<h1 style='text-align: center;'>🦖 공룡 시대 생존기 🛸</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>시공간을 넘어선 공룡 생존 시뮬레이션</p>", unsafe_allow_html=True)
-    st.write("---")
+    st.markdown("<h1 style='text-align: center; margin-top: 100px;'>🦖 공룡 시대 생존기 🛸</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>일상에서 공룡 시대로! 1인칭 직접 조작 생존 게임</p>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("🎮 게임 시작", use_container_width=True):
-            st.session_state.stage = 'STORY_INTRO'
+        if st.button("🎮 게임 시작하기", use_container_width=True):
+            st.session_state.stage = 'STORY_3D'
             st.rerun()
 
-# 1. 오프닝 스토리 (가정집 탑뷰 -> UFO 납치)
-elif st.session_state.stage == 'STORY_INTRO':
-    story_scripts = [
-        "평범한 주말 오후, 당신은 집 안 거실에 서 있습니다.",
-        "문득 달콤한 아이스크림이 먹고 싶어져 밖으로 나갑니다. 🍦",
-        "아이스크림 가게로 향하던 중, 갑자기 하늘이 요란하게 반짝입니다!",
-        "하늘을 올려다보니 초록색 외계인이 타고 있는 UFO가 나타났습니다! 🛸👽",
-        "우웅---! 초록색 강한 빛과 함께 당신은 UFO 안으로 빨려 들어갑니다!!"
-    ]
+# 1. 3D 직접 조작 탐색 (가정집 1인칭 조작 -> 현관문 -> 도시 이동 -> UFO 납치)
+elif st.session_state.stage == 'STORY_3D':
+    st.write("🕹️ **조작법:** 3D 화면을 클릭하면 마우스로 360도 시점 회전이 가능합니다. (이동: W, A, S, D)")
     
-    # 3D 가정집 및 탑뷰 캐릭터 화면 출력
-    render_house_topview(st.session_state.intro_step)
+    # 3D 인터랙티브 월드 출력
+    render_interactive_3d_world()
     
-    # 자막 표시
-    current_text = story_scripts[st.session_state.intro_step]
-    st.markdown(f'<div class="subtitle-box">💬 {current_text}</div>', unsafe_allow_html=True)
-    
-    st.write("")
-    if st.session_state.intro_step < len(story_scripts) - 1:
-        if st.button("다음 ▶", use_container_width=True):
-            st.session_state.intro_step += 1
-            st.rerun()
-    else:
-        if st.button("정신 차리기 🌀", use_container_width=True):
-            st.session_state.stage = 'ERA_SELECT'
-            st.rerun()
+    # UFO에 납치되었을 때 다음 단계로 넘어가기 위한 수동 전환 버튼 제공
+    if st.button("🌀 UFO에 납치된 후 정신 차리기 (다음으로)"):
+        st.session_state.stage = 'ERA_SELECT'
+        st.rerun()
 
 # 2. 시대 선택
 elif st.session_state.stage == 'ERA_SELECT':
@@ -312,7 +430,7 @@ elif st.session_state.stage == 'ERA_SELECT':
         st.session_state.stage = 'FLASH'
         st.rerun()
 
-# 3. 번쩍이는 효과 연출
+# 3. 번쩍이는 연출
 elif st.session_state.stage == 'FLASH':
     flash_holder = st.empty()
     flash_holder.markdown("<h1 style='text-align: center; font-size: 100px;'>⚡⚡⚡</h1>", unsafe_allow_html=True)
@@ -326,7 +444,6 @@ elif st.session_state.stage == 'EGG':
     st.caption("눈을 떠보니 좁고 컴컴한 공간입니다.")
     
     egg_states = ["🥚", "🥚 (금 가기 시작)", "🥚💥 (금이 쩍쩍 갈라집니다!)", "🐣 부화 성공!"]
-    
     st.markdown(f'<div class="egg-crack">{egg_states[st.session_state.crack_count]}</div>', unsafe_allow_html=True)
     
     if st.session_state.crack_count < 3:
@@ -344,7 +461,6 @@ elif st.session_state.stage == 'DINO_3D':
     st.title(f"🦖 당신은 **{dino['name']}**(으)로 태어났습니다!")
     st.write(dino['desc'])
     
-    # 3D 입체 모델 출력
     render_3d_dino(dino['name'], dino['color'])
     
     col1, col2, col3 = st.columns([1, 2, 1])
