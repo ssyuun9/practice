@@ -3,33 +3,22 @@ import streamlit.components.v1 as components
 import random
 import time
 
-# 1. 페이지 및 화면 전체 채우기 설정 (CSS)
+# 1. 페이지 및 전체 화면 CSS 설정
 st.set_page_config(page_title="공룡 시대 생존기", page_icon="🦖", layout="wide")
 
 st.markdown("""
     <style>
-    /* Streamlit 기본 여백 제거 및 전체 화면 구성 */
+    /* Streamlit 여백 제거 및 전체 화면 구성 */
     .block-container {
-        padding-top: 0.5rem !important;
+        padding-top: 0.2rem !important;
         padding-bottom: 0rem !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
+        padding-left: 0.2rem !important;
+        padding-right: 0.2rem !important;
         max-width: 100% !important;
     }
     header {visibility: hidden;}
     footer {visibility: hidden;}
     
-    .subtitle-box {
-        background-color: rgba(0, 0, 0, 0.85);
-        color: #00ff66;
-        padding: 15px 20px;
-        border-radius: 8px;
-        font-family: 'Courier New', monospace;
-        font-size: 18px;
-        text-align: center;
-        border: 2px solid #00ff66;
-        margin-top: 10px;
-    }
     .egg-crack {
         text-align: center;
         font-size: 80px;
@@ -94,7 +83,7 @@ if 'day' not in st.session_state:
 if 'logs' not in st.session_state:
     st.session_state.logs = []
 
-# --- 3D 1인칭 직접 조작 캔버스 (마우스 드래그 및 키보드 통합 컨트롤) ---
+# --- 3D 인터랙티브 월드 (Three.js 기반) ---
 def render_interactive_3d_world():
     html_code = """
     <!DOCTYPE html>
@@ -102,27 +91,27 @@ def render_interactive_3d_world():
     <head>
         <style>
             body { margin: 0; overflow: hidden; font-family: sans-serif; background: #000; }
-            #canvas-container { width: 100vw; height: 70vh; position: relative; user-select: none; }
+            #canvas-container { width: 100vw; height: 78vh; position: relative; user-select: none; }
             #ui-box {
                 position: absolute; bottom: 15px; left: 50%;
                 transform: translateX(-50%);
                 background: rgba(0,0,0,0.85); color: #00ff66;
-                padding: 10px 20px; border-radius: 8px;
+                padding: 12px 24px; border-radius: 8px;
                 border: 2px solid #00ff66; font-size: 16px; text-align: center;
                 z-index: 5; pointer-events: none;
             }
-            #door-btn {
+            #door-handle-btn {
                 position: absolute; top: 15px; left: 50%;
                 transform: translateX(-50%);
                 background: #ffcc00; color: #000; font-weight: bold;
                 padding: 12px 24px; border-radius: 8px; font-size: 18px;
-                border: none; cursor: pointer; display: none; z-index: 20;
-                box-shadow: 0 0 10px #ffcc00;
+                border: 2px solid #fff; cursor: pointer; display: none; z-index: 20;
+                box-shadow: 0 0 15px #ffcc00;
             }
             #guide-overlay {
                 position: absolute; top: 10px; left: 10px;
-                background: rgba(0,0,0,0.6); color: #fff;
-                padding: 8px 12px; border-radius: 6px; font-size: 13px;
+                background: rgba(0,0,0,0.7); color: #fff;
+                padding: 10px 14px; border-radius: 6px; font-size: 13px;
                 z-index: 10; pointer-events: none;
             }
         </style>
@@ -130,12 +119,11 @@ def render_interactive_3d_world():
     <body>
         <div id="canvas-container">
             <div id="guide-overlay">
-                🕹️ <b>조작방법:</b><br>
-                - 이동: <b>W, A, S, D</b> 키<br>
-                - 시점 회전: <b>마우스 클릭 후 드래그</b>
+                🖱️ <b>화면 클릭 후 드래그:</b> 360도 & 위아래 시점 회전<br>
+                ⌨️ <b>W, A, S, D:</b> 이동 (이동 시 1인칭으로 자동 전환)
             </div>
-            <button id="door-btn" onclick="doorInteract()">🚪 집 밖으로 나가기</button>
-            <div id="ui-box">💬 거실을 탐색하세요! 현관문(오른쪽 벽) 근처로 이동하면 나갈 수 있습니다.</div>
+            <button id="door-handle-btn" onclick="openDoorAndExit()">✊ 문손잡이 잡고 문 열기</button>
+            <div id="ui-box">💬 거실에 서 있습니다. 마우스와 키보드로 조작을 시작하세요.</div>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -149,18 +137,38 @@ def render_interactive_3d_world():
             container.appendChild(renderer.domElement);
 
             let uiBox = document.getElementById('ui-box');
-            let doorBtn = document.getElementById('door-btn');
+            let doorBtn = document.getElementById('door-handle-btn');
 
             let currentZone = 0; // 0: 집 안, 1: 도시
+            let isFirstPerson = false; // 시작은 탑뷰
 
-            // 이동 및 마우스 드래그 변수
+            // 조작 및 시점 변수
             let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
             let isMouseDown = false;
             let mouseX = 0, mouseY = 0;
-            let lon = -90, lat = 0;
+            let lon = -90, lat = -20; // 초기 각도
             let phi = 0, theta = 0;
+            
+            // 로블록스 스타일 캐릭터
+            let playerGroup = new THREE.Group();
+            let charBody, charHead;
 
-            // 이벤트 리스너: 키보드 이동
+            function createRobloxCharacter() {
+                let bodyGeo = new THREE.BoxGeometry(0.8, 1.0, 0.4);
+                let bodyMat = new THREE.MeshStandardMaterial({ color: 0x0088ff });
+                charBody = new THREE.Mesh(bodyGeo, bodyMat);
+                charBody.position.y = 0.5;
+
+                let headGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+                let headMat = new THREE.MeshStandardMaterial({ color: 0xffcc99 });
+                charHead = new THREE.Mesh(headGeo, headMat);
+                charHead.position.y = 1.25;
+
+                playerGroup.add(charBody, charHead);
+                playerGroup.position.set(0, 0, 0);
+            }
+
+            // 키보드 이벤트
             window.addEventListener('keydown', (e) => {
                 switch (e.code) {
                     case 'KeyW': moveForward = true; break;
@@ -168,7 +176,13 @@ def render_interactive_3d_world():
                     case 'KeyS': moveBackward = true; break;
                     case 'KeyD': moveRight = true; break;
                 }
+                if (moveForward || moveBackward || moveLeft || moveRight) {
+                    if (!isFirstPerson && currentZone === 0) {
+                        isFirstPerson = true; // 이동 시작 시 1인칭 전환
+                    }
+                }
             });
+
             window.addEventListener('keyup', (e) => {
                 switch (e.code) {
                     case 'KeyW': moveForward = false; break;
@@ -178,7 +192,7 @@ def render_interactive_3d_world():
                 }
             });
 
-            // 이벤트 리스너: 마우스 드래그 시점 회전
+            // 마우스 드래그 시점 회전 (360도 + 위아래)
             container.addEventListener('mousedown', (e) => {
                 isMouseDown = true;
                 mouseX = e.clientX;
@@ -187,79 +201,107 @@ def render_interactive_3d_world():
             window.addEventListener('mouseup', () => { isMouseDown = false; });
             window.addEventListener('mousemove', (e) => {
                 if (isMouseDown) {
-                    lon += (e.clientX - mouseX) * 0.25;
-                    lat -= (e.clientY - mouseY) * 0.25;
-                    lat = Math.max(-85, Math.min(85, lat));
+                    lon += (e.clientX - mouseX) * 0.3;
+                    lat -= (e.clientY - mouseY) * 0.3;
+                    lat = Math.max(-85, Math.min(85, lat)); // 위아래 회전 제한
                     mouseX = e.clientX;
                     mouseY = e.clientY;
                 }
             });
 
-            // --- 월드 구축 ---
+            // --- 환경 구축 ---
             let houseGroup = new THREE.Group();
             let cityGroup = new THREE.Group();
-            let ufoGroup = new THREE.Group();
+            let doorMesh, handleMesh;
 
             function buildHouse() {
                 scene.background = new THREE.Color(0x1a1a1a);
+                createRobloxCharacter();
+                houseGroup.add(playerGroup);
+
                 // 바닥
-                let floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ color: 0x8b5a2b }));
+                let floor = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), new THREE.MeshStandardMaterial({ color: 0x8b5a2b }));
                 floor.rotation.x = -Math.PI / 2;
                 houseGroup.add(floor);
+
                 // 벽
                 let wallMat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
-                let wall1 = new THREE.Mesh(new THREE.BoxGeometry(20, 5, 0.2), wallMat); wall1.position.set(0, 2.5, -10);
-                let wall2 = new THREE.Mesh(new THREE.BoxGeometry(20, 5, 0.2), wallMat); wall2.position.set(0, 2.5, 10);
-                let wall3 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 5, 20), wallMat); wall3.position.set(-10, 2.5, 0);
+                let wall1 = new THREE.Mesh(new THREE.BoxGeometry(16, 4, 0.2), wallMat); wall1.position.set(0, 2, -8);
+                let wall2 = new THREE.Mesh(new THREE.BoxGeometry(16, 4, 0.2), wallMat); wall2.position.set(0, 2, 8);
+                let wall3 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4, 16), wallMat); wall3.position.set(-8, 2, 0);
                 houseGroup.add(wall1, wall2, wall3);
 
-                // 현관문
-                let doorMat = new THREE.MeshStandardMaterial({ color: 0x553311 });
-                let door = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4, 2), doorMat);
-                door.position.set(9.9, 2, 0);
-                houseGroup.add(door);
+                // 현관문 & 문손잡이 (오른쪽 벽)
+                doorMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.5, 2), new THREE.MeshStandardMaterial({ color: 0x553311 }));
+                doorMesh.position.set(7.9, 1.75, 0);
+                
+                handleMesh = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), new THREE.MeshStandardMaterial({ color: 0xffd700 }));
+                handleMesh.position.set(7.7, 1.75, 0.6);
+                houseGroup.add(doorMesh, handleMesh);
 
                 // 가구
                 let sofa = new THREE.Mesh(new THREE.BoxGeometry(3, 1, 1.5), new THREE.MeshStandardMaterial({ color: 0x992222 }));
-                sofa.position.set(-5, 0.5, -5);
+                sofa.position.set(-4, 0.5, -4);
                 houseGroup.add(sofa);
 
                 scene.add(houseGroup);
-                camera.position.set(0, 1.6, 0);
             }
+
+            let ufoGroup = new THREE.Group();
+            let ufoBeam = null;
 
             function buildCity() {
                 scene.remove(houseGroup);
                 scene.background = new THREE.Color(0x87ceeb);
 
-                let road = new THREE.Mesh(new THREE.PlaneGeometry(50, 100), new THREE.MeshStandardMaterial({ color: 0x444444 }));
+                // 도로
+                let road = new THREE.Mesh(new THREE.PlaneGeometry(30, 80), new THREE.MeshStandardMaterial({ color: 0x333333 }));
                 road.rotation.x = -Math.PI / 2;
                 cityGroup.add(road);
 
-                for(let i = -40; i <= 40; i += 20) {
-                    let b1 = new THREE.Mesh(new THREE.BoxGeometry(10, 15 + Math.random()*10, 10), new THREE.MeshStandardMaterial({ color: 0x778899 }));
-                    b1.position.set(-15, 8, i);
-                    let b2 = new THREE.Mesh(new THREE.BoxGeometry(10, 15 + Math.random()*10, 10), new THREE.MeshStandardMaterial({ color: 0x778899 }));
-                    b2.position.set(15, 8, i);
+                // 횡단보도 (아이스크림 가게 앞)
+                for (let i = -6; i <= 6; i += 2.5) {
+                    let stripe = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 6), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+                    stripe.rotation.x = -Math.PI / 2;
+                    stripe.position.set(i, 0.01, -15);
+                    cityGroup.add(stripe);
+                }
+
+                // 건물들
+                for(let i = -30; i <= 30; i += 15) {
+                    if (i === -15) continue; // 가게 자리 비워둠
+                    let b1 = new THREE.Mesh(new THREE.BoxGeometry(8, 12 + Math.random()*8, 8), new THREE.MeshStandardMaterial({ color: 0x778899 }));
+                    b1.position.set(-10, 6, i);
+                    let b2 = new THREE.Mesh(new THREE.BoxGeometry(8, 12 + Math.random()*8, 8), new THREE.MeshStandardMaterial({ color: 0x778899 }));
+                    b2.position.set(10, 6, i);
                     cityGroup.add(b1, b2);
                 }
 
-                // 아이스크림 가게
-                let shop = new THREE.Mesh(new THREE.BoxGeometry(8, 6, 8), new THREE.MeshStandardMaterial({ color: 0xff6699 }));
-                shop.position.set(0, 3, -35);
+                // 아이스크림 가게 (횡단보도 건너편)
+                let shop = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 8), new THREE.MeshStandardMaterial({ color: 0xff6699 }));
+                shop.position.set(0, 2.5, -25);
                 cityGroup.add(shop);
 
-                // UFO
-                let ufoDisc = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 1, 16), new THREE.MeshStandardMaterial({ color: 0x888888 }));
-                let ufoDome = new THREE.Mesh(new THREE.SphereGeometry(2.5, 16, 16), new THREE.MeshStandardMaterial({ color: 0x00ff00, transparent: true, opacity: 0.7 }));
-                ufoDome.position.y = 0.5;
+                // 아이스크림 간판
+                let sign = new THREE.Mesh(new THREE.ConeGeometry(1.2, 2.5, 8), new THREE.MeshStandardMaterial({ color: 0xffcc00 }));
+                sign.position.set(0, 6.5, -21);
+                cityGroup.add(sign);
+
+                // UFO (처음에는 숨김)
+                let ufoDisc = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 0.8, 16), new THREE.MeshStandardMaterial({ color: 0x555555 }));
+                let ufoDome = new THREE.Mesh(new THREE.SphereGeometry(2, 16, 16), new THREE.MeshStandardMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 }));
+                ufoDome.position.y = 0.4;
                 ufoGroup.add(ufoDisc, ufoDome);
-                ufoGroup.position.set(0, 20, -20);
+                ufoGroup.position.set(0, 18, -15); // 횡단보도 상공
+                ufoGroup.visible = false;
                 cityGroup.add(ufoGroup);
 
+                // 도시 진입 후 플레이어 위치
+                playerGroup.position.set(0, 0, 15);
+                cityGroup.add(playerGroup);
+
                 scene.add(cityGroup);
-                camera.position.set(0, 1.6, 30);
-                uiBox.innerText = "🍦 저기 멀리 보이는 분홍색 아이스크림 가게로 전진(W)하세요!";
+                uiBox.innerText = "🍦 밖으로 나왔습니다! 횡단보도 건너편 아이스크림 가게로 가세요.";
             }
 
             // 조명
@@ -270,14 +312,24 @@ def render_interactive_3d_world():
 
             buildHouse();
 
-            window.doorInteract = function() {
-                currentZone = 1;
+            // 문열기 동작
+            window.openDoorAndExit = function() {
+                // 문 열리는 회전 애니메이션
+                doorMesh.rotation.y = -Math.PI / 2;
+                handleMesh.position.x = 7.9;
                 doorBtn.style.display = 'none';
-                buildCity();
+                uiBox.innerText = "🚪 문이 열렸습니다. 밖으로 나갑니다...";
+                
+                setTimeout(() => {
+                    currentZone = 1;
+                    isFirstPerson = true;
+                    buildCity();
+                }, 800);
             };
 
             let captured = false;
-            let speed = 0.15;
+            let floatSpeed = 0.08;
+            let isFloating = false;
 
             function animate() {
                 requestAnimationFrame(animate);
@@ -287,45 +339,75 @@ def render_interactive_3d_world():
                 phi = THREE.MathUtils.degToRad(90 - lat);
                 theta = THREE.MathUtils.degToRad(lon);
 
-                let target = new THREE.Vector3();
-                target.x = camera.position.x + 100 * Math.sin(phi) * Math.cos(theta);
-                target.y = camera.position.y + 100 * Math.cos(phi);
-                target.z = camera.position.z + 100 * Math.sin(phi) * Math.sin(theta);
-                camera.lookAt(target);
-
-                // 이동 계산
                 let dir = new THREE.Vector3();
-                camera.getWorldDirection(dir);
-                dir.y = 0;
+                dir.x = Math.sin(phi) * Math.cos(theta);
+                dir.y = Math.cos(phi);
+                dir.z = Math.sin(phi) * Math.sin(theta);
                 dir.normalize();
 
-                let sideDir = new THREE.Vector3(-dir.z, 0, dir.x);
+                let moveDir = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+                let sideDir = new THREE.Vector3(-moveDir.z, 0, moveDir.x);
 
-                if (moveForward) camera.position.addScaledVector(dir, speed);
-                if (moveBackward) camera.position.addScaledVector(dir, -speed);
-                if (moveLeft) camera.position.addScaledVector(sideDir, -speed);
-                if (moveRight) camera.position.addScaledVector(sideDir, speed);
+                let speed = 0.12;
 
-                // 현관문 체크
+                // 이동 제어 (부양 중이 아닐 때만 가능)
+                if (!isFloating) {
+                    if (moveForward) playerGroup.position.addScaledVector(moveDir, speed);
+                    if (moveBackward) playerGroup.position.addScaledVector(moveDir, -speed);
+                    if (moveLeft) playerGroup.position.addScaledVector(sideDir, -speed);
+                    if (moveRight) playerGroup.position.addScaledVector(sideDir, speed);
+                }
+
+                // 카메라 위치 업데이트 (1인칭 / 탑뷰)
+                if (isFirstPerson) {
+                    camera.position.set(playerGroup.position.x, playerGroup.position.y + 1.4, playerGroup.position.z);
+                    let target = new THREE.Vector3().addVectors(camera.position, dir);
+                    camera.lookAt(target);
+                } else {
+                    // 처음 탑뷰 시점 (위에서 내려다봄)
+                    camera.position.set(playerGroup.position.x, playerGroup.position.y + 5, playerGroup.position.z + 4);
+                    camera.lookAt(playerGroup.position);
+                }
+
+                // 1. 집 안: 문손잡이 감지
                 if (currentZone === 0) {
-                    if (camera.position.x > 7.0 && Math.abs(camera.position.z) < 3.0) {
+                    if (playerGroup.position.x > 5.5 && Math.abs(playerGroup.position.z) < 2.5) {
                         doorBtn.style.display = 'block';
-                        uiBox.innerText = "🚪 현관문 앞입니다! 버튼을 눌러 밖으로 나가세요.";
+                        uiBox.innerText = "🚪 현관문 문손잡이에 도달했습니다. 버튼을 눌러 문을 여세요!";
                     } else {
                         doorBtn.style.display = 'none';
-                        uiBox.innerText = "💬 W,A,S,D키로 이동하여 현관문(오른쪽 벽)으로 가세요.";
+                        if (isFirstPerson) {
+                            uiBox.innerText = "💬 현관문(오른쪽 벽) 문손잡이로 걸어가세요.";
+                        }
                     }
                 }
 
-                // UFO 납치 체크
+                // 2. 도시: 횡단보도 근처 접근 시 UFO 급출현 및 공중 부양 납치
                 if (currentZone === 1 && !captured) {
-                    if (camera.position.z < 0) {
+                    // 아이스크림 가게 도달 직전 (횡단보도 거리: z = -10 근처)
+                    if (playerGroup.position.z < -8) {
                         captured = true;
-                        uiBox.innerText = "🛸 하늘에서 초록 외계인 UFO가 나타나 당신을 빨아들입니다!!";
-                        
-                        let beam = new THREE.Mesh(new THREE.CylinderGeometry(2, 5, 25, 16), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.6 }));
-                        beam.position.set(0, 10, camera.position.z);
-                        scene.add(beam);
+                        isFloating = true;
+                        ufoGroup.visible = true; // UFO 갑자기 연출
+
+                        // 초록색 기둥 광선 생성
+                        let beamGeo = new THREE.CylinderGeometry(2, 3.5, 20, 16);
+                        let beamMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.6 });
+                        ufoBeam = new THREE.Mesh(beamGeo, beamMat);
+                        ufoBeam.position.set(0, 8, -15);
+                        cityGroup.add(ufoBeam);
+
+                        uiBox.innerText = "🛸 갑자기 하늘에서 UFO가 나타나 캐릭터를 붕 띄워 빨아들입니다!!";
+                    }
+                }
+
+                // 공중 부양 납치 애니메이션 연출
+                if (isFloating) {
+                    playerGroup.position.y += floatSpeed; // 캐릭터 붕 떠오름
+                    playerGroup.rotation.y += 0.1; // 떠오르면서 회전
+                    if (playerGroup.position.y > 15) {
+                        isFloating = false;
+                        uiBox.innerText = "🌀 외계인 UFO에 완전히 빨려 들어갔습니다...";
                     }
                 }
 
@@ -337,8 +419,7 @@ def render_interactive_3d_world():
     </body>
     </html>
     """
-    # pointer-lock 브라우저 제한 우회를 위해 마우스 드래그 방식 사용
-    components.html(html_code, height=620)
+    components.html(html_code, height=660)
 
 # 3D 공룡 렌더링
 def render_3d_dino(dino_name, dino_color):
@@ -392,10 +473,10 @@ def render_3d_dino(dino_name, dino_color):
     components.html(html_code, height=370)
 
 # ==========================================
-# 게임 단계 제어
+# 게임 진행 단계
 # ==========================================
 
-# 0. 메인 시작 화면
+# 0. 시작 화면
 if st.session_state.stage == 'TITLE':
     st.markdown("<h1 style='text-align: center; margin-top: 80px;'>🦖 공룡 시대 생존기 🛸</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>일상에서 공룡 시대로! 1인칭 직접 조작 생존 게임</p>", unsafe_allow_html=True)
@@ -406,10 +487,8 @@ if st.session_state.stage == 'TITLE':
             st.session_state.stage = 'STORY_3D'
             st.rerun()
 
-# 1. 3D 직접 조작 탐색
+# 1. 3D 직접 조작 탐색 (탑뷰 시작 -> 이동시 1인칭 -> 문손잡이 오픈 -> 횡단보도 UFO 공중부양 납치)
 elif st.session_state.stage == 'STORY_3D':
-    st.write("🎮 **조작 가이드:** 화면을 클릭한 채로 드래그하면 **360도 시점 변경**, **W, A, S, D**키로 이동합니다.")
-    
     render_interactive_3d_world()
     
     if st.button("🌀 UFO에 납치되어 다음 단계로 진행", use_container_width=True):
@@ -508,7 +587,7 @@ elif st.session_state.stage == 'PLAYING':
             st.session_state.logs.append(f"[{st.session_state.day-1}일차] 휴식을 취했습니다.")
             
         if st.session_state.hp <= 0:
-            st.error("☠️ 체력이 다하여 생존에 실패했습니다...")
+            st.error("☠️️ 체력이 다하여 생존에 실패했습니다...")
             if st.button("처음부터 다시하기"):
                 st.session_state.clear()
                 st.rerun()
