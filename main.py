@@ -19,7 +19,40 @@ st.markdown(
       [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
         margin: 0 !important; padding: 0 !important; max-width: 100% !important;
       }
-      [data-testid="stSidebar"] { display: block !important; }
+      /* 사이드바는 Streamlit 기본 접기/펼치기 동작을 유지 */
+      [data-testid="stSidebar"] {
+        display: flex !important;
+        visibility: visible !important;
+        transition: margin-left .2s ease, transform .2s ease;
+      }
+
+      /* 사이드바가 접혔을 때 다시 펼치는 화살표 */
+      [data-testid="stSidebarCollapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        position: fixed !important;
+        top: 0.65rem !important;
+        left: 0.65rem !important;
+        z-index: 999999 !important;
+        pointer-events: auto !important;
+      }
+
+      [data-testid="stSidebarCollapsedControl"] button,
+      [data-testid="stSidebarCollapseButton"] button {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        min-width: 2.5rem !important;
+        min-height: 2.5rem !important;
+        background: #20332b !important;
+        color: white !important;
+        border: 1px solid #719b7d !important;
+        border-radius: 8px !important;
+        z-index: 999999 !important;
+      }
+
       [data-testid="stToolbar"], [data-testid="stDecoration"],
       [data-testid="stStatusWidget"], footer { display: none !important; }
       iframe { display: block; border: 0 !important; }
@@ -1606,3 +1639,4 @@ else:
         show_detail(st.session_state.selected_dinosaur, st.session_state.selected_era)
     else:
         show_era(st.session_state.selected_era)
+
