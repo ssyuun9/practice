@@ -19,6 +19,13 @@ st.markdown(
       [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
         margin: 0 !important; padding: 0 !important; max-width: 100% !important;
       }
+      /* 상단 페이지 선택 메뉴가 화면 위쪽에서 잘리지 않도록 여백 확보 */
+      [data-testid="stMainBlockContainer"] {
+        padding-top: 1.25rem !important;
+      }
+      .block-container {
+        padding: 1.25rem 0 0 !important;
+      }
       [data-testid="stToolbar"], [data-testid="stDecoration"],
       [data-testid="stStatusWidget"], footer { display: none !important; }
       iframe { display: block; border: 0 !important; }
