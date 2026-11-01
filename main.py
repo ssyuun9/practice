@@ -1,23 +1,26 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import urllib.request
+import urllib.parse
+import json
 
 st.set_page_config(
     page_title="공룡 생존기",
     page_icon="🦖",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # Hide Streamlit chrome so the game can use almost the whole viewport.
 st.markdown(
     """
     <style>
-      html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"],
-      [data-testid="stMainBlockContainer"] {
-        margin: 0 !important; padding: 0 !important; width: 100% !important;
-        max-width: 100% !important; overflow: hidden !important;
+      html, body { margin: 0 !important; padding: 0 !important; }
+      [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+        margin: 0 !important; padding: 0 !important; max-width: 100% !important;
       }
-      [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"],
+      [data-testid="stSidebar"] { display: block !important; }
+      [data-testid="stToolbar"], [data-testid="stDecoration"],
       [data-testid="stStatusWidget"], footer { display: none !important; }
       iframe { display: block; border: 0 !important; }
       .block-container { padding: 0 !important; }
@@ -90,7 +93,7 @@ GAME_HTML = r"""
     text-shadow:0 2px 12px #000; background:#001b19a8; border-radius:14px; padding:14px 22px; }
   #mobileControls { display:none; position:absolute; left:12px; bottom:55px; gap:10px; }
   .controlBtn { width:48px;height:48px;border-radius:14px;border:1px solid #fff8;background:#13271dbd;color:white;font-size:19px; }
-  #runBtn { display:none; position:absolute; right:20px; bottom:22px; z-index:12; width:58px; height:58px; border-radius:50%; border:2px solid #ffffffb8; background:#173a27eF; color:#fff; font-size:25px; font-weight:900; box-shadow:0 4px 14px #0008; cursor:pointer; }
+  #runBtn { display:none; position:absolute; right:20px; bottom:22px; z-index:30; width:58px; height:58px; border-radius:50%; border:2px solid #ffffffb8; background:#173a27ef; color:#fff; font-size:25px; font-weight:900; box-shadow:0 4px 14px #0008; cursor:pointer; pointer-events:auto; }
   #runBtn.active { background:#79a83b; border-color:#e4ffc0; box-shadow:0 0 0 3px #d7ff8a55,0 4px 14px #0008; }
   #runBtn small { display:block; font-size:10px; line-height:1; margin-top:1px; }
   @media (max-width:700px) { #runBtn { right:14px; bottom:18px; width:52px; height:52px; } #centerPrompt { bottom:118px; } }
@@ -110,9 +113,9 @@ GAME_HTML = r"""
   <div id="eraScreen" class="screen">
     <h1 id="eraTitle">발견할 시대를 선택하세용</h1>
     <div class="eras">
-      <button class="era" data-era="triassic"><span class="footprint">🐾</span><span>트라이아스기</span><small>최초의 공룡 시대</small></button>
       <button class="era" data-era="jurassic"><span class="footprint">🐾</span><span>쥐라기</span><small>거대한 초식 공룡</small></button>
       <button class="era" data-era="cretaceous"><span class="footprint">🐾</span><span>백악기</span><small>다양한 공룡의 시대</small></button>
+      <button class="era" data-era="triassic"><span class="footprint">🐾</span><span>트라이아스기</span><small>최초의 공룡 시대</small></button>
     </div>
   </div>
   <div id="hud">
@@ -149,6 +152,8 @@ GAME_HTML = r"""
   let solidMeshes=[];
   let worldGroup, playerGroup, eggGroup, dinosaurGroup, alienGroup, cityGroup;
   let mouseDown=false, lastMouseX=0, lastMouseY=0, moving=false, abductionTriggered=false;
+  let schoolBlackoutAt=0, fallingAvatar=null, fallingStartedAt=0;
+  let livingDinos=[];
   let runEnabled=false;
   const eras = {
     triassic: {
@@ -375,6 +380,7 @@ GAME_HTML = r"""
     villageSchool.material.transparent=true; villageSchool.material.opacity=0; villageSchool.userData.trigger='school'; objects.push(villageSchool);
     player.position.set(0,1.7,8); yaw=0; pitch=0; updateCamera();
     phase='village'; setVisible('hud',false); setVisible('help',true); setVisible('crosshair',true);
+    // 마을 입구 정면의 불필요한 갈색 네모 문은 표시하지 않음.
   }
   function buildCity() {
     const g=newWorld(0x777b78,0xa9c0ce); cityGroup=g;
@@ -503,6 +509,7 @@ GAME_HTML = r"""
     return group;
   }
   function buildPrehistoric() {
+    livingDinos=[];
     const era=eras[selectedEra], g=newWorld(era.ground,era.sky); scene.fog=new THREE.Fog(era.sky,42,230);
     // varied terrain with meadow patches, water river and sea
     for(let i=0;i<120;i++) {
@@ -517,12 +524,15 @@ GAME_HTML = r"""
     for(let i=0;i<12;i++) box(g, -28+Math.sin(i*.6)*9,.08,-75+i*12,8,.12,15,water,{rotationY:.1});
     // distant sea
     box(g,0,-.03,-155,340,.12,45,mat(0x247f9a,.28,.12));
-    for(let i=0;i<16;i++) {
+    livingDinos=[];
+    for(let i=0;i<20;i++) {
       const spec=era.dinos[Math.floor(Math.random()*era.dinos.length)];
-      const d=addDinosaur(g,spec,(Math.random()-.5)*115,-25-Math.random()*135,.55+Math.random()*.6);
+      const startX=(Math.random()-.5)*115, startZ=-25-Math.random()*135;
+      const d=addDinosaur(g,spec,startX,startZ,.55+Math.random()*.6);
       d.rotation.y=Math.random()*Math.PI*2;
+      d.userData.wildAI={homeX:startX,homeZ:startZ,targetX:startX+(Math.random()-.5)*22,targetZ:startZ+(Math.random()-.5)*22,wait:Math.random()*4,grazing:false,phase:Math.random()*6.28};
+      livingDinos.push(d);
       dinosaurGroup=dinosaurGroup||new THREE.Group();
-      // The dino meshes are already children of the world.
     }
     // nest near player
     eggGroup=new THREE.Group(); eggGroup.position.set(0,0,-5); g.add(eggGroup);
@@ -590,7 +600,10 @@ GAME_HTML = r"""
     return false;
   }
   function movePlayer(dt) {
-    if(!['village','city','school','prehistoric','home'].includes(phase)) return;
+    if(!['village','city','school','prehistoric','home'].includes(phase)) { $('runBtn').style.display='none'; return; }
+    const canRun=['village','city','school','prehistoric'].includes(phase);
+    $('runBtn').style.display=canRun ? 'block' : 'none';
+    $('runBtn').classList.toggle('active',runEnabled);
     const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
     const right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
     const dir=new THREE.Vector3();
@@ -599,14 +612,10 @@ GAME_HTML = r"""
     if(keys.d||keys.arrowright) dir.add(right);
     if(keys.a||keys.arrowleft) dir.sub(right);
     moving=dir.lengthSq()>0;
-    const outdoors=['village','city','school','prehistoric'].includes(phase);
-    $('runBtn').style.display=outdoors?'block':'none';
-    $('runBtn').classList.toggle('active',runEnabled && outdoors);
-    $('runBtn').setAttribute('aria-label',runEnabled?'달리기 끄기':'달리기 켜기');
     if(moving) {
       dir.normalize();
-      const isOutdoors=['village','city','school','prehistoric'].includes(phase);
-      const speed=(keys.shift || (runEnabled && isOutdoors)) ? 11.5 : player.speed;
+      const outdoor=['village','city','school','prehistoric'].includes(phase);
+      const speed=(outdoor && (keys.shift || runEnabled)) ? 11.5 : player.speed;
       const stepX = dir.x * speed * dt;
       const stepZ = dir.z * speed * dt;
       const nextX = player.position.x + stepX;
@@ -670,7 +679,7 @@ GAME_HTML = r"""
   }
   let schoolAliens=[], schoolChaseStartedAt=0, schoolDragStartedAt=0;
   function startSchoolAlienWarning() {
-    phase='schoolWarning'; schoolAliens=[];
+    phase='schoolWarning'; schoolBlackoutAt=0; schoolAliens=[];
     setVisible('help',false); setVisible('crosshair',false); setVisible('centerPrompt',false);
     $('alienText').textContent='⚠️ 경고: 학교 안에 외계인이 접근하고 있습니다!';
     setVisible('alienText',true);
@@ -709,6 +718,48 @@ GAME_HTML = r"""
     },3500);
     // The departure transition is handled after the saucer flies away in animate().
   }
+  function buildFallingHuman() {
+    if(fallingAvatar) scene.remove(fallingAvatar);
+    const avatar=new THREE.Group();
+    const skin=mat(0xd9a47d), shirt=mat(0x2e75a8), pants=mat(0x26374b), shoes=mat(0x242424), hair=mat(0x30251f);
+    // Human-shaped third-person avatar: head, neck, torso, articulated arms and legs.
+    const torso=new THREE.Mesh(new THREE.CapsuleGeometry(.28, .58, 4, 8), shirt);
+    torso.position.y=1.12; avatar.add(torso);
+    const neck=new THREE.Mesh(new THREE.CylinderGeometry(.105,.12,.16,10),skin); neck.position.y=1.53; avatar.add(neck);
+    const head=new THREE.Mesh(new THREE.SphereGeometry(.22,16,12),skin); head.position.y=1.78; head.scale.set(.88,1.08,.92); avatar.add(head);
+    const hairCap=new THREE.Mesh(new THREE.SphereGeometry(.225,16,10,0,Math.PI*2,0,Math.PI*.55),hair); hairCap.position.set(0,1.86,-.015); avatar.add(hairCap);
+    const face=new THREE.Mesh(new THREE.BoxGeometry(.15,.045,.025),mat(0x382b25)); face.position.set(0,1.78,-.202); avatar.add(face);
+    const armPivots=[], legPivots=[];
+    for(const side of [-1,1]) {
+      const arm=new THREE.Group(); arm.position.set(side*.36,1.36,0); avatar.add(arm); armPivots.push(arm);
+      const upper=new THREE.Mesh(new THREE.CapsuleGeometry(.09,.34,4,8),shirt); upper.position.y=-.22; arm.add(upper);
+      const fore=new THREE.Mesh(new THREE.CapsuleGeometry(.073,.28,4,8),skin); fore.position.set(0,-.53,-.015); arm.add(fore);
+      const hand=new THREE.Mesh(new THREE.SphereGeometry(.085,10,8),skin); hand.position.set(0,-.72,-.02); arm.add(hand);
+      const leg=new THREE.Group(); leg.position.set(side*.16,.83,0); avatar.add(leg); legPivots.push(leg);
+      const thigh=new THREE.Mesh(new THREE.CapsuleGeometry(.115,.34,4,8),pants); thigh.position.y=-.22; leg.add(thigh);
+      const shin=new THREE.Mesh(new THREE.CapsuleGeometry(.085,.34,4,8),pants); shin.position.set(0,-.55,-.015); leg.add(shin);
+      const shoe=new THREE.Mesh(new THREE.BoxGeometry(.18,.12,.32),shoes); shoe.position.set(0,-.77,-.075); leg.add(shoe);
+    }
+    avatar.userData.armPivots=armPivots; avatar.userData.legPivots=legPivots;
+    avatar.position.set(player.position.x,player.position.y-1.7,player.position.z);
+    avatar.rotation.y=yaw; scene.add(avatar); fallingAvatar=avatar;
+    return avatar;
+  }
+  function beginEraFall() {
+    // Build the selected era first, then place the unchanged human avatar high above it.
+    if(fallingAvatar) { scene.remove(fallingAvatar); fallingAvatar=null; }
+    buildPrehistoric();
+    phase='falling';
+    player.position.set(0,62,18); yaw=Math.PI; pitch=0;
+    buildFallingHuman();
+    setVisible('hud',false); setVisible('help',false); setVisible('crosshair',false);
+    setVisible('eggHint',false); setVisible('infoCard',false); setVisible('nextHint',false);
+    setVisible('centerPrompt',false); setVisible('message',false);
+    fallingStartedAt=performance.now();
+    camera.position.set(0,66,27); camera.lookAt(0,60,18);
+    $('fade').style.transition='opacity 1.1s';
+    $('fade').style.opacity='0';
+  }
   function buildEraScreen() {
     phase='era';
     setVisible('titleScreen',false); setVisible('eraScreen',true,'flex');
@@ -719,12 +770,13 @@ GAME_HTML = r"""
   function chooseEra(era) {
     selectedEra=era;
     setVisible('eraScreen',false);
+    setVisible('message',false);
     renderer.domElement.style.display='block';
-    fadeToBlack(()=> {
-      buildPrehistoric();
-      setVisible('titleScreen',false);
-      setVisible('eraScreen',false);
-    });
+    $('fade').style.transition='opacity .65s'; $('fade').style.opacity='1';
+    setTimeout(()=> {
+      setVisible('titleScreen',false); setVisible('eraScreen',false);
+      beginEraFall();
+    },650);
   }
   function hatchEgg() {
     if(phase!=='egg') return;
@@ -781,7 +833,34 @@ GAME_HTML = r"""
         defense=THREE.MathUtils.clamp(defense+(Math.random()-.52)*1.1,25,100);
         updateStats();
       }
-      if(dinosaurGroup) dinosaurGroup.rotation.y+=dt*.05;
+      // Wild dinosaurs roam independently, pause to graze/drink, then choose a new destination.
+      for(const d of livingDinos) {
+        const ai=d.userData.wildAI; if(!ai) continue;
+        ai.phase+=dt; ai.wait-=dt;
+        if(ai.wait<=0) {
+          if(!ai.grazing && d.userData.spec.diet==='초식' && Math.random()<.58) {
+            ai.grazing=true; ai.wait=2.5+Math.random()*3.5;
+          } else {
+            ai.grazing=false;
+            ai.targetX=ai.homeX+(Math.random()-.5)*30;
+            ai.targetZ=ai.homeZ+(Math.random()-.5)*30;
+            ai.wait=5+Math.random()*7;
+          }
+        }
+        if(!ai.grazing) {
+          const dx=ai.targetX-d.position.x, dz=ai.targetZ-d.position.z;
+          const dist=Math.hypot(dx,dz);
+          if(dist>.8) {
+            const speed=d.userData.spec.diet==='육식'?1.35:.72;
+            d.position.x+=(dx/dist)*speed*dt; d.position.z+=(dz/dist)*speed*dt;
+            d.rotation.y=Math.atan2(-dx,-dz);
+          } else { ai.wait=Math.min(ai.wait,.4); }
+          d.rotation.z=Math.sin(ai.phase*5)*.018;
+        } else {
+          // A small repeated head/body dip represents feeding.
+          d.rotation.x=Math.sin(ai.phase*4)*.045;
+        }
+      }
     }
     if(phase==='hatching' && eggGroup) eggGroup.rotation.y+=dt*.3;
     if(phase==='schoolChase' || phase==='schoolDragged') {
@@ -810,7 +889,7 @@ GAME_HTML = r"""
         player.position.x += (0-player.position.x)*dt*.8;
         updateCamera();
         if(performance.now()-schoolDragStartedAt>1900) {
-          phase='schoolBlackout';
+          phase='schoolBlackout'; schoolBlackoutAt=performance.now();
           $('alienText').textContent=''; setVisible('alienText',false);
           $('fade').style.transition='opacity 1.2s'; $('fade').style.opacity='1';
           setVisible('message',true,'flex');
@@ -842,6 +921,32 @@ GAME_HTML = r"""
         }
       }
     }
+    if(phase==='schoolBlackout' && schoolBlackoutAt && performance.now()-schoolBlackoutAt>=2000) {
+      schoolBlackoutAt=0;
+      setVisible('message',false);
+      buildEraScreen();
+      $('fade').style.transition='opacity 1.1s'; $('fade').style.opacity='0';
+    }
+    if(phase==='falling' && fallingAvatar) {
+      player.position.y=Math.max(1.7,player.position.y-dt*13.5);
+      fallingAvatar.position.set(player.position.x,player.position.y-1.7,player.position.z);
+      fallingAvatar.rotation.y=yaw;
+      const t=(performance.now()-fallingStartedAt)/1000;
+      fallingAvatar.rotation.z=Math.sin(t*5)*.10;
+      fallingAvatar.rotation.x=.12+Math.sin(t*4)*.07;
+      fallingAvatar.userData.armPivots.forEach((arm,i)=>{ arm.rotation.x=Math.sin(t*7+i*Math.PI)*.65; arm.rotation.z=(i===0?-.18:.18); });
+      fallingAvatar.userData.legPivots.forEach((leg,i)=>{ leg.rotation.x=Math.sin(t*7+i*Math.PI)*.48; });
+      camera.position.set(player.position.x,player.position.y+3.2,player.position.z+8.5);
+      camera.lookAt(fallingAvatar.position.x,fallingAvatar.position.y+1.0,fallingAvatar.position.z);
+      if(player.position.y<=1.7) {
+        player.position.y=1.7;
+        if(fallingAvatar) { scene.remove(fallingAvatar); fallingAvatar=null; }
+        phase='prehistoric'; yaw=0; pitch=0; updateCamera();
+        setVisible('hud',true); setVisible('help',true); setVisible('crosshair',true);
+        setVisible('eggHint',false); setVisible('infoCard',false); setVisible('nextHint',false);
+        health=100; attack=50+Math.random()*20; defense=50+Math.random()*20; updateStats();
+      }
+    }
     if(renderer && renderer.domElement.style.display!=='none') renderer.render(scene,camera);
   }
   // Start / era controls
@@ -853,12 +958,7 @@ GAME_HTML = r"""
   });
   document.querySelectorAll('.era').forEach(b=>b.addEventListener('click',()=>chooseEra(b.dataset.era)));
   $('interactBtn').addEventListener('click',interact);
-  $('runBtn').addEventListener('click',e=>{
-    e.preventDefault(); e.stopPropagation();
-    runEnabled=!runEnabled;
-    $('runBtn').classList.toggle('active',runEnabled);
-    $('runBtn').setAttribute('aria-label',runEnabled?'달리기 끄기':'달리기 켜기');
-  });
+  $('runBtn').addEventListener('click',e=>{ e.preventDefault(); e.stopPropagation(); runEnabled=!runEnabled; $('runBtn').classList.toggle('active',runEnabled); $('runBtn').setAttribute('aria-label',runEnabled?'달리기 끄기':'달리기 켜기'); });
   $('hatchBtn').addEventListener('click',hatchEgg);
   $('nextBtn').addEventListener('click',enterPrehistoric);
   window.addEventListener('keydown',e=>{
@@ -928,4 +1028,581 @@ GAME_HTML = r"""
 </html>
 """
 
-components.html(GAME_HTML, height=1000, scrolling=False)
+
+
+# ==========================================
+# 공룡 도감 페이지 (별도 페이지로 통합)
+# ==========================================
+
+page_choice = st.sidebar.radio("페이지 선택", ["게임", "공룡 도감"], key="main_page_choice")
+
+# ==========================================
+# 2. 공룡 데이터
+# ==========================================
+
+DINOSAURS = {
+    "트라이아스기": [
+        "헤레라사우루스", "스타우리코사우루스", "에오랍토르",
+        "코엘로피시스", "릴리엔스테르누스", "프로콤프소그나투스",
+        "에우디모르포돈", "플라테오사우루스", "리오자사우루스",
+        "무사우루스", "안키사우루스", "세라토사우루스",
+        "타니스트로페우스", "노토사우루스", "쇼니사우루스",
+        "믹소사우루스", "심보스폰딜루스", "프테로닥틸루스",
+        "람포린쿠스", "프레온닥틸루스", "스카포그나투스",
+        "포스토수쿠스", "리스트로사우루스"
+    ],
+
+    "쥐라기": [
+        "알로사우루스", "케라토사우루스", "딜로포사우루스",
+        "메갈로사우루스", "토르보사우루스", "마르쇼사우루스",
+        "콤프소그나투스", "오르니톨레스테스", "신랍토르",
+        "양추아노사우루스", "모노로포사우루스", "크리올로포사우루스",
+        "아파토사우루스", "브라키오사우루스", "디플로도쿠스",
+        "카마라사우루스", "바로사우루스", "슈노사우루스",
+        "마멘키사우루스", "슈퍼사우루스", "세이스모사우루스",
+        "케티오사우루스", "투리아사우루스", "스테고사우루스",
+        "켄트로사우루스", "화양고사우루스", "미라가이아",
+        "드라코펠타", "가고사우루스", "에우로펠타",
+        "캄토사우루스", "드리오사우루스", "오스니엘리아",
+        "헤테로돈토사우루스", "리코리누스", "아브릭토사우루스",
+        "오트니엘로사우루스", "마르기노케팔리아"
+    ],
+
+    "백악기": [
+        "스피노사우루스", "카르카로돈토사우루스", "티라노사우루스",
+        "유티라누스", "딜롱", "알렉트로사우루스",
+        "벨로키사우루스", "드로마이오사우루스", "데이노니쿠스",
+        "오비랍토르", "테리지노사우루스", "오르니토미무스",
+        "시노사우롭테릭스", "마시아카사우루스", "델타드로메우스",
+        "노아사우루스", "기가노토사우루스", "수코미무스",
+        "아마르가사우루스", "사우로포세이돈", "황허티탄",
+        "후쿠이티탄", "에우헬로푸스", "펠로로사우루스",
+        "아르젠티노사우루스", "파타고티탄", "우에르호사우루스",
+        "파란토돈", "안타르크토펠타", "스테고우로스",
+        "안킬로사우루스", "에드몬토니아", "이구아노돈",
+        "우리노사우루스", "테논토사우루스", "무타부라사우루스",
+        "레아엘리나사우라", "가스파리니사우라", "콴타사우루스",
+        "아틀라스콥코사우루스", "에드몬토사우루스",
+        "프시타코사우루스", "프로토케라톱스", "트리케라톱스",
+        "아퀼롭스", "랴오케라톱스", "렙토케라톱스",
+        "파키케팔로사우루스", "미크로파키케팔로사우루스",
+        "스테노펠릭스"
+    ]
+}
+
+# ==========================================
+# 3. 공룡 분류 데이터
+# ==========================================
+
+CATEGORIES = {
+    "수각류": [
+        "헤레라사우루스", "스타우리코사우루스", "에오랍토르",
+        "코엘로피시스", "릴리엔스테르누스", "프로콤프소그나투스",
+        "세라토사우루스", "알로사우루스", "케라토사우루스",
+        "딜로포사우루스", "메갈로사우루스", "토르보사우루스",
+        "마르쇼사우루스", "콤프소그나투스", "오르니톨레스테스",
+        "신랍토르", "양추아노사우루스", "모노로포사우루스",
+        "크리올로포사우루스", "스피노사우루스",
+        "카르카로돈토사우루스", "티라노사우루스", "유티라누스",
+        "딜롱", "알렉트로사우루스", "벨로키사우루스",
+        "드로마이오사우루스", "데이노니쿠스", "오비랍토르",
+        "테리지노사우루스", "오르니토미무스", "시노사우롭테릭스",
+        "마시아카사우루스", "델타드로메우스", "노아사우루스",
+        "기가노토사우루스", "수코미무스"
+    ],
+
+    "용각류 및 근연 분류군": [
+        "플라테오사우루스", "리오자사우루스", "무사우루스",
+        "안키사우루스", "아파토사우루스", "브라키오사우루스",
+        "디플로도쿠스", "카마라사우루스", "바로사우루스",
+        "슈노사우루스", "마멘키사우루스", "슈퍼사우루스",
+        "세이스모사우루스", "케티오사우루스", "투리아사우루스",
+        "아마르가사우루스", "사우로포세이돈", "황허티탄",
+        "후쿠이티탄", "에우헬로푸스", "펠로로사우루스",
+        "아르젠티노사우루스", "파타고티탄"
+    ],
+
+    "검룡류": [
+        "스테고사우루스", "켄트로사우루스",
+        "화양고사우루스", "미라가이아",
+        "우에르호사우루스", "파란토돈", "스테고우로스"
+    ],
+
+    "곡룡류": [
+        "드라코펠타", "가고사우루스", "에우로펠타",
+        "안타르크토펠타", "안킬로사우루스", "에드몬토니아"
+    ],
+
+    "조각류 및 기타 조반류": [
+        "캄토사우루스", "드리오사우루스", "오스니엘리아",
+        "헤테로돈토사우루스", "리코리누스",
+        "아브릭토사우루스", "오트니엘로사우루스",
+        "이구아노돈", "테논토사우루스", "무타부라사우루스",
+        "레아엘리나사우라", "가스파리니사우라",
+        "콴타사우루스", "아틀라스콥코사우루스",
+        "에드몬토사우루스"
+    ],
+
+    "각룡류": [
+        "프시타코사우루스", "프로토케라톱스",
+        "트리케라톱스", "아퀼롭스",
+        "랴오케라톱스", "렙토케라톱스"
+    ],
+
+    "후두류": [
+        "파키케팔로사우루스",
+        "미크로파키케팔로사우루스", "스테노펠릭스"
+    ]
+}
+
+# 기타 선사시대 동물
+OTHER_ANIMALS = {
+    "익룡": [
+        "에우디모르포돈", "프테로닥틸루스",
+        "람포린쿠스", "프레온닥틸루스",
+        "스카포그나투스"
+    ],
+    "해양 파충류": [
+        "타니스트로페우스", "노토사우루스",
+        "쇼니사우루스", "믹소사우루스",
+        "심보스폰딜루스"
+    ],
+    "기타 고대 동물": [
+        "포스토수쿠스", "리스트로사우루스"
+    ]
+}
+
+# ==========================================
+# 4. 이미지 가져오기
+# ==========================================
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_dinosaur_image(name):
+    try:
+        query = urllib.parse.urlencode({
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": name,
+            "gsrnamespace": 0,
+            "gsrlimit": 1,
+            "prop": "pageimages",
+            "piprop": "thumbnail",
+            "pithumbsize": 700
+        })
+
+        url = "https://ko.wikipedia.org/w/api.php?" + query
+
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "DinosaurDictionary/1.0"}
+        )
+
+        with urllib.request.urlopen(request, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        pages = data.get("query", {}).get("pages", {})
+
+        for page in pages.values():
+            return page.get("thumbnail", {}).get("source")
+
+    except Exception:
+        return None
+
+    return None
+
+# ==========================================
+# 5. 디자인
+# ==========================================
+
+st.markdown("""
+<style>
+.stApp {
+    background-color: #101a17;
+    color: #f3f5ee;
+}
+
+h1, h2, h3, p, label {
+    color: #f3f5ee;
+}
+
+.dino-title {
+    text-align: center;
+    font-size: 48px;
+    font-weight: 900;
+    margin-top: 25px;
+    color: #b7e4c7;
+}
+
+.dino-subtitle {
+    text-align: center;
+    color: #c1cec3;
+    font-size: 17px;
+    margin-bottom: 35px;
+}
+
+.dino-card {
+    background: #20332b;
+    border: 1px solid #456653;
+    border-radius: 15px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+
+.dino-card h3 {
+    color: #d4f2dc;
+}
+
+div.stButton > button {
+    border-radius: 12px;
+    border: 1px solid #719b7d;
+    background-color: #294638;
+    color: white;
+    font-weight: bold;
+    min-height: 48px;
+}
+
+div.stButton > button:hover {
+    background-color: #477858;
+    color: white;
+    border-color: #b7e4c7;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 6. 세부 정보 생성
+# ==========================================
+
+def get_category(name):
+    for category, animals in CATEGORIES.items():
+        if name in animals:
+            return category
+
+    for category, animals in OTHER_ANIMALS.items():
+        if name in animals:
+            return category
+
+    if name == "마르기노케팔리아":
+        return "조반류의 분류군"
+
+    return "분류 확인 필요"
+
+
+def get_food(name):
+    if name in OTHER_ANIMALS.get("익룡", []):
+        return "동물성 먹이를 먹었음"
+    if name in OTHER_ANIMALS.get("해양 파충류", []):
+        return "주로 물속의 동물을 먹었음"
+    if name in OTHER_ANIMALS.get("기타 고대 동물", []):
+        return "종에 따라 식성이 다름"
+
+    category = get_category(name)
+
+    if category == "수각류":
+        if name in ["오비랍토르", "테리지노사우루스",
+                    "오르니토미무스"]:
+            return "잡식성 또는 식물성 먹이 섭취 가능성"
+        return "육식성"
+
+    if category in [
+        "용각류 및 근연 분류군", "검룡류", "곡룡류",
+        "조각류 및 기타 조반류", "각룡류", "후두류"
+    ]:
+        return "초식성"
+
+    return "확인 필요"
+
+
+def get_era_note(name, era):
+    if name == "세라토사우루스":
+        return "실제 생존 시기는 쥐라기입니다. 원래 보내준 목록의 트라이아스기 항목에 표시되어 있습니다."
+    if name == "프테로닥틸루스":
+        return "실제 생존 시기는 쥐라기 후기입니다."
+    if name == "람포린쿠스":
+        return "실제 생존 시기는 쥐라기 후기입니다."
+    if name == "마르기노케팔리아":
+        return "개별 공룡 속명이 아니라 각룡류와 후두류 등을 포함하는 분류군의 이름입니다."
+    if name in OTHER_ANIMALS.get("익룡", []):
+        return "공룡이 아닌 익룡입니다."
+    if name in OTHER_ANIMALS.get("해양 파충류", []):
+        return "공룡이 아닌 해양 파충류입니다."
+    if name in OTHER_ANIMALS.get("기타 고대 동물", []):
+        return "공룡이 아닌 다른 고대 파충류 또는 단궁류입니다."
+    return "정확한 생존 시기는 종별 화석 기록에 따라 확인해야 합니다."
+
+
+# ==========================================
+# 7. 페이지 상태
+# ==========================================
+
+if "selected_era" not in st.session_state:
+    st.session_state.selected_era = None
+
+if "selected_dinosaur" not in st.session_state:
+    st.session_state.selected_dinosaur = None
+
+
+# ==========================================
+# 8. 첫 화면
+# ==========================================
+
+def show_home():
+
+    st.markdown(
+        '<div class="dino-title">🦖 공룡 도감</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<div class="dino-subtitle">'
+        '공룡들이 살았던 세상으로 떠나 보세요!'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+
+    # 세 시대 버튼을 화면 중앙에 일렬로 배치
+    left, col1, col2, col3, right = st.columns(
+        [1, 2, 2, 2, 1]
+    )
+
+    eras = [
+        ("트라이아스기", "🦕", "약 2억 5200만~2억 100만 년 전"),
+        ("쥐라기", "🦖", "약 2억 100만~1억 4500만 년 전"),
+        ("백악기", "🦕", "약 1억 4500만~6600만 년 전")
+    ]
+
+    for col, (era, emoji, period) in zip(
+        [col1, col2, col3], eras
+    ):
+        with col:
+            st.markdown(
+                f"""
+                <div class="dino-card">
+                    <h2 style="text-align:center;">{emoji}</h2>
+                    <h3 style="text-align:center;">{era}</h3>
+                    <p style="text-align:center;font-size:12px;">
+                        {period}
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            if st.button(
+                f"{era} 탐험하기",
+                key=f"era_{era}",
+                use_container_width=True
+            ):
+                st.session_state.selected_era = era
+                st.session_state.selected_dinosaur = None
+                st.rerun()
+
+    st.write("")
+    st.markdown(
+        "<h3 style='text-align:center;'>"
+        "세 시대의 다양한 고대 생물들을 만나 보세요!"
+        "</h3>",
+        unsafe_allow_html=True
+    )
+
+
+# ==========================================
+# 9. 시대별 공룡 목록
+# ==========================================
+
+def show_era(era):
+
+    if st.button("← 시대 선택으로 돌아가기"):
+        st.session_state.selected_era = None
+        st.session_state.selected_dinosaur = None
+        st.rerun()
+
+    st.markdown(
+        f'<div class="dino-title">🦖 {era} 도감</div>',
+        unsafe_allow_html=True
+    )
+
+    dinosaurs = DINOSAURS[era]
+
+    st.write(f"총 {len(dinosaurs)}종의 목록")
+
+    search = st.text_input(
+        "🔍 공룡 이름 검색",
+        placeholder="예: 티라노사우루스, 알로사우루스"
+    )
+
+    category_options = [
+        "전체",
+        "수각류",
+        "용각류 및 근연 분류군",
+        "검룡류",
+        "곡룡류",
+        "조각류 및 기타 조반류",
+        "각룡류",
+        "후두류",
+        "익룡",
+        "해양 파충류",
+        "기타 고대 동물",
+        "조반류의 분류군",
+        "분류 확인 필요"
+    ]
+
+    selected_category = st.selectbox(
+        "공룡 종류별 분류",
+        category_options
+    )
+
+    filtered = []
+
+    for name in dinosaurs:
+        if search and search not in name:
+            continue
+
+        category = get_category(name)
+
+        if selected_category != "전체":
+            if category != selected_category:
+                continue
+
+        filtered.append(name)
+
+    st.write(f"검색 결과: {len(filtered)}종")
+
+    if not filtered:
+        st.info("검색 결과가 없습니다.")
+        return
+
+    # 두 열로 공룡 카드 표시
+    for i in range(0, len(filtered), 2):
+
+        cols = st.columns(2)
+
+        for j in range(2):
+            if i + j >= len(filtered):
+                break
+
+            name = filtered[i + j]
+            category = get_category(name)
+            food = get_food(name)
+
+            with cols[j]:
+                st.markdown(
+                    f"""
+                    <div class="dino-card">
+                        <h3>{name}</h3>
+                        <p>분류: {category}</p>
+                        <p>식성: {food}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                if st.button(
+                    f"{name} 자세히 보기",
+                    key=f"detail_{era}_{name}",
+                    use_container_width=True
+                ):
+                    st.session_state.selected_dinosaur = name
+                    st.rerun()
+
+
+# ==========================================
+# 10. 공룡 상세 도감
+# ==========================================
+
+def show_detail(name, era):
+
+    if st.button("← 공룡 목록으로 돌아가기"):
+        st.session_state.selected_dinosaur = None
+        st.rerun()
+
+    st.title(f"🦖 {name}")
+
+    category = get_category(name)
+    food = get_food(name)
+
+    image_url = get_dinosaur_image(name)
+
+    if image_url:
+        st.image(
+            image_url,
+            caption=f"{name}",
+            use_container_width=True
+        )
+    else:
+        st.info(
+            "대표 이미지를 자동으로 불러오지 못했습니다. "
+            "공룡 이름을 검색해 이미지를 확인해 주세요."
+        )
+
+    st.subheader("📖 기본 정보")
+
+    info1, info2 = st.columns(2)
+
+    with info1:
+        st.markdown("**목록에 수록된 시대**")
+        st.write(era)
+
+        st.markdown("**분류**")
+        st.write(category)
+
+    with info2:
+        st.markdown("**식성**")
+        st.write(food)
+
+        st.markdown("**생물 종류**")
+        if name in OTHER_ANIMALS.get("익룡", []):
+            st.write("익룡")
+        elif name in OTHER_ANIMALS.get("해양 파충류", []):
+            st.write("해양 파충류")
+        elif name in OTHER_ANIMALS.get("기타 고대 동물", []):
+            st.write("기타 고대 동물")
+        else:
+            st.write("공룡 또는 관련 분류군")
+
+    st.divider()
+
+    st.subheader("🔎 생물학적 특징")
+
+    st.write(
+        f"{name}은(는) {category}에 해당하는 "
+        f"생물입니다. 식성은 {food}으로 분류됩니다."
+    )
+
+    st.subheader("⚠️ 시대 및 분류 참고")
+
+    st.write(get_era_note(name, era))
+
+    st.caption(
+        "※ 도감의 분류와 식성은 기본적인 안내 정보입니다. "
+        "정확한 크기, 생존 시기 및 생태 정보는 "
+        "해당 종의 화석 연구 자료를 추가로 확인해야 합니다."
+    )
+
+    wiki_query = urllib.parse.quote(name)
+
+    st.link_button(
+        "📚 더 자세한 정보 검색하기",
+        f"https://ko.wikipedia.org/wiki/{wiki_query}"
+    )
+
+
+
+
+if page_choice == "게임":
+    components.html(GAME_HTML, height=1000, scrolling=False)
+else:
+    if "selected_era" not in st.session_state:
+        st.session_state.selected_era = None
+    if "selected_dinosaur" not in st.session_state:
+        st.session_state.selected_dinosaur = None
+    if st.session_state.selected_era is None:
+        show_home()
+    elif st.session_state.selected_dinosaur is not None:
+        show_detail(st.session_state.selected_dinosaur, st.session_state.selected_era)
+    else:
+        show_era(st.session_state.selected_era)
