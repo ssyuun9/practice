@@ -92,10 +92,19 @@ GAME_HTML = r"""
     text-shadow:0 2px 12px #000; background:#001b19a8; border-radius:14px; padding:14px 22px; }
   #mobileControls { display:none; position:absolute; left:12px; bottom:55px; gap:10px; }
   .controlBtn { width:48px;height:48px;border-radius:14px;border:1px solid #fff8;background:#13271dbd;color:white;font-size:19px; }
-  #runBtn { display:none; position:absolute; right:20px; bottom:22px; z-index:30; width:58px; height:58px; border-radius:50%; border:2px solid #ffffffb8; background:#173a27ef; color:#fff; font-size:25px; font-weight:900; box-shadow:0 4px 14px #0008; cursor:pointer; pointer-events:auto; }
-  #runBtn.active { background:#79a83b; border-color:#e4ffc0; box-shadow:0 0 0 3px #d7ff8a55,0 4px 14px #0008; }
-  #runBtn small { display:block; font-size:10px; line-height:1; margin-top:1px; }
-  @media (max-width:700px) { #runBtn { right:14px; bottom:18px; width:52px; height:52px; } #centerPrompt { bottom:118px; } }
+  #runBtn {
+    display:none; position:fixed; right:22px; bottom:24px; z-index:99999;
+    width:68px; height:68px; border-radius:50%; border:2px solid #ffffffb8;
+    background:#173a27ef; color:#fff; font-size:27px; font-weight:900;
+    box-shadow:0 4px 14px #0008; cursor:pointer; pointer-events:auto;
+    touch-action:manipulation; user-select:none; -webkit-user-select:none;
+  }
+  #runBtn.active { background:#79a83b; border-color:#e4ffc0; box-shadow:0 0 0 4px #d7ff8a55,0 4px 14px #0008; }
+  #runBtn small { display:block; font-size:11px; line-height:1; margin-top:2px; }
+  @media (max-width:700px) {
+    #runBtn { right:16px; bottom:22px; width:62px; height:62px; }
+    #centerPrompt { bottom:118px; }
+  }
   @media (pointer:coarse) { #mobileControls { display:flex; flex-wrap:wrap; width:165px; } #help { bottom:8px; } }
 </style>
 </head>
@@ -603,6 +612,8 @@ GAME_HTML = r"""
     const canRun=['village','city','school','prehistoric'].includes(phase);
     $('runBtn').style.display=canRun ? 'block' : 'none';
     $('runBtn').classList.toggle('active',runEnabled);
+    $('runBtn').setAttribute('aria-pressed',runEnabled ? 'true' : 'false');
+    $('runBtn').setAttribute('aria-label',runEnabled ? '달리기 끄기' : '달리기 켜기');
     const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
     const right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
     const dir=new THREE.Vector3();
@@ -957,7 +968,14 @@ GAME_HTML = r"""
   });
   document.querySelectorAll('.era').forEach(b=>b.addEventListener('click',()=>chooseEra(b.dataset.era)));
   $('interactBtn').addEventListener('click',interact);
-  $('runBtn').addEventListener('click',e=>{ e.preventDefault(); e.stopPropagation(); runEnabled=!runEnabled; $('runBtn').classList.toggle('active',runEnabled); $('runBtn').setAttribute('aria-label',runEnabled?'달리기 끄기':'달리기 켜기'); });
+  $('runBtn').addEventListener('click',e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    runEnabled=!runEnabled;
+    $('runBtn').classList.toggle('active',runEnabled);
+    $('runBtn').setAttribute('aria-pressed',runEnabled ? 'true' : 'false');
+    $('runBtn').setAttribute('aria-label',runEnabled ? '달리기 끄기' : '달리기 켜기');
+  });
   $('hatchBtn').addEventListener('click',hatchEgg);
   $('nextBtn').addEventListener('click',enterPrehistoric);
   window.addEventListener('keydown',e=>{
